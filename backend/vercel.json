@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "env": {
+    "DATABASE_URL": "REPLACE_BEFORE_DEPLOY_thrive_production_database_url",
+    "JWT_SECRET": "REPLACE_BEFORE_DEPLOY_generate_a_new_secret",
+    "NODE_ENV": "production"
+  },
+  "builds": [
+    {
+      "src": "src/index.ts",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "src/index.ts"
+    }
+  ]
+}

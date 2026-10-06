@@ -1,0 +1,43 @@
+# Vercel Ignore File
+# Only deploy build/web output — exclude everything else
+
+# Flutter platform directories
+/android
+/ios
+/linux
+/macos
+/windows
+/test
+/.dart_tool
+
+# Node modules
+/node_modules
+
+# Log files
+*.log
+*.txt
+*.zip
+*.dill
+*.cache
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+
+# Exclude all build artifacts except build/web
+/build/453eb640ffdab84f41efe1858565e61a
+/build/flutter_assets
+/build/native_assets
+/build/native_hooks
+/build/*.cache.dill.track.dill
+
+# Source code (not needed for static hosting)
+/lib
+/assets
+/pubspec.yaml
+/pubspec.lock
+/analysis_options.yaml
+/devtools_options.yaml
+/salon_management_system.iml
+!build/web/

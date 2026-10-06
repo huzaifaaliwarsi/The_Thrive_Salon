@@ -1,0 +1,60 @@
+name: salon_management_system
+description: A new Flutter salon management project.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  flutter_riverpod: ^2.5.1
+  dio: ^5.4.1
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  path_provider: ^2.1.2
+  url_launcher: ^6.2.4
+  whatsapp_share: ^2.0.2
+  syncfusion_flutter_charts: ^25.1.37
+  intl: ^0.19.0
+  shared_preferences: ^2.2.2
+  uuid: ^4.3.3
+  crypto: ^3.0.3
+  google_fonts: ^8.0.2
+  flutter_animate: ^4.5.2
+  lucide_icons:
+    path: vendor/lucide_icons
+  share_plus: ^9.0.0
+  sqflite: ^2.3.0
+  path: ^1.9.0
+  connectivity_plus: ^6.0.3
+  workmanager: ^0.9.0+3
+  flutter_secure_storage: ^10.0.0
+  table_calendar: ^3.1.2
+  csv: ^6.0.0
+  file_picker: ^8.0.0
+  printing: ^5.13.1
+  pdf: ^3.12.0
+  excel: ^4.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+  hive_generator: ^2.0.1
+  build_runner: ^2.4.8
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/fonts/
+  fonts:
+    - family: Lucide
+      fonts:
+        - asset: assets/fonts/lucide.ttf
+    - family: packages/lucide_icons/Lucide
+      fonts:
+        - asset: assets/fonts/lucide.ttf

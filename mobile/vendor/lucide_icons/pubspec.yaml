@@ -1,0 +1,14 @@
+name: lucide_icons
+description: Project-local compatibility copy of lucide_icons 0.257.0.
+version: 0.257.0
+publish_to: none
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+flutter:
+  fonts:
+    - family: Lucide
+      fonts:
+        - asset: assets/lucide.ttf

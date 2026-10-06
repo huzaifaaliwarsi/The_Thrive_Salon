@@ -1,0 +1,40 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Allow existing files and directories to be served directly
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Route all other URLs to index.html (SPA routing)
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# MIME types for fonts, web assets, and WebAssembly
+<IfModule mod_mime.c>
+  AddType font/ttf .ttf
+  AddType font/otf .otf
+  AddType font/woff .woff
+  AddType font/woff2 .woff2
+  AddType application/font-woff .woff
+  AddType application/font-woff2 .woff2
+  AddType application/vnd.ms-fontobject .eot
+  AddType application/wasm .wasm
+  AddType application/javascript .js
+  AddType application/json .json
+</IfModule>
+
+# CORS Headers for Web Fonts and WebAssembly
+<IfModule mod_headers.c>
+  <FilesMatch "\.(ttf|ttc|otf|eot|woff|woff2|font\.css|css|js|wasm|json)$">
+    Header set Access-Control-Allow-Origin "*"
+    Header set Access-Control-Allow-Methods "GET, OPTIONS"
+    Header set Access-Control-Allow-Headers "*"
+  </FilesMatch>
+
+  # Ensure fonts are cached efficiently
+  <FilesMatch "\.(ttf|otf|woff|woff2)$">
+    Header set Cache-Control "max-age=2592000, public"
+  </FilesMatch>
+</IfModule>

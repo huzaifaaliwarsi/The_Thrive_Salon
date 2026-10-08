@@ -317,7 +317,13 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), chec
             ...s.user,
             email: isOwnProfile ? s.user.email : '***@***.com',
             phone: isOwnProfile ? s.user.phone : (s.user.phone ? '***' : null)
-          } : null,
+          } : {
+            id: null,
+            email: null,
+            phone: s.phone || null,
+            role: 'STAFF',
+            isActive: 'true'
+          },
           salesCount: isOwnProfile ? Number(stats.salesCount) : 0,
           totalSalesRevenue: isOwnProfile ? Number(stats.totalSalesRevenue) : 0,
           balance: isOwnProfile ? parseFloat(ledger.balance || '0') : 0

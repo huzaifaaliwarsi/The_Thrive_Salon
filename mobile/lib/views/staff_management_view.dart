@@ -229,10 +229,12 @@ class _StaffManagementViewState extends ConsumerState<StaffManagementView> {
                         itemCount: filteredStaff.length,
                         itemBuilder: (context, index) {
                           final staff = filteredStaff[index];
-                          final user = staff['user'];
-                          final bool isActive = user['isActive'] != 'false';
-                          final String role = (user['role'] as String).replaceAll('_', ' ');
-                          final String initials = (staff['name'] as String)
+                          final user = staff['user'] is Map ? staff['user'] as Map : null;
+                          final bool isActive = user != null ? (user['isActive'] != 'false' && user['isActive'] != false) : true;
+                          final String role = (user != null && user['role'] != null)
+                              ? (user['role'] as String).replaceAll('_', ' ')
+                              : 'STAFF';
+                          final String initials = (staff['name'] as String? ?? 'S')
                               .trim()
                               .split(' ')
                               .take(2)
@@ -313,7 +315,7 @@ class _StaffManagementViewState extends ConsumerState<StaffManagementView> {
                                           ),
                                         ],
                                       ]),
-                                      if (user['email'] != null && user['email'] != '***@***.com') ...[
+                                      if (user != null && user['email'] != null && user['email'] != '***@***.com' && user['email'].toString().isNotEmpty) ...[
                                         const SizedBox(height: 4),
                                         Row(
                                           children: [
@@ -321,7 +323,7 @@ class _StaffManagementViewState extends ConsumerState<StaffManagementView> {
                                             const SizedBox(width: 4),
                                             Expanded(
                                               child: Text(
-                                                user['email'],
+                                                user['email'].toString(),
                                                 style: GoogleFonts.outfit(fontSize: 12, color: Colors.black45),
                                                 overflow: TextOverflow.ellipsis,
                                               ),
@@ -329,14 +331,14 @@ class _StaffManagementViewState extends ConsumerState<StaffManagementView> {
                                           ],
                                         ),
                                       ],
-                                      if ((staff['phone'] != null && staff['phone'] != '***') || (user['phone'] != null && user['phone'] != '***')) ...[
+                                      if ((staff['phone'] != null && staff['phone'] != '***' && staff['phone'].toString().isNotEmpty) || (user != null && user['phone'] != null && user['phone'] != '***' && user['phone'].toString().isNotEmpty)) ...[
                                         const SizedBox(height: 4),
                                         Row(
                                           children: [
                                             Icon(LucideIcons.phone, size: 12, color: Colors.grey.shade400),
                                             const SizedBox(width: 4),
                                             Text(
-                                              (staff['phone'] != null && staff['phone'] != '***') ? staff['phone'] : user['phone'],
+                                              (staff['phone'] != null && staff['phone'] != '***' && staff['phone'].toString().isNotEmpty) ? staff['phone'].toString() : (user != null ? user['phone']?.toString() ?? '' : ''),
                                               style: GoogleFonts.outfit(fontSize: 12, color: Colors.black45),
                                             ),
                                           ],
@@ -426,14 +428,18 @@ class _StaffManagementViewState extends ConsumerState<StaffManagementView> {
                                         if (action == 'edit') {
                                           _showEditStaffDialog(staff);
                                         } else if (action == 'toggle') {
-                                          try {
-                                            await ref.read(apiServiceProvider).toggleUserLock(user['id']);
-                                            _refresh();
-                                          } catch (e) {
-                                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+                                          if (user != null && user['id'] != null) {
+                                            try {
+                                              await ref.read(apiServiceProvider).toggleUserLock(user['id']);
+                                              _refresh();
+                                            } catch (e) {
+                                              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+                                            }
                                           }
                                         } else if (action == 'resetpw') {
-                                          _showResetPasswordDialog(user['id']);
+                                          if (user != null && user['id'] != null) {
+                                            _showResetPasswordDialog(user['id']);
+                                          }
                                         } else if (action == 'delete') {
                                           _confirmDeleteStaff(staff['id'], staff['name']);
                                         }

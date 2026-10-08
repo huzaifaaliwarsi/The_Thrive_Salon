@@ -20,6 +20,7 @@ import reports from './routes/reports';
 import salary from './routes/salary';
 import maintenance from './routes/maintenance';
 import zkteco from './routes/zkteco';
+import paymentAccounts from './routes/paymentAccounts';
 import { securityLock } from './middleware/securityLock';
 
 export const app = express();
@@ -34,7 +35,11 @@ app.get('/api/health', async (_req, res) => {
   } catch { res.status(503).json({ status: 'database unavailable' }); }
 });
 if (process.env.NODE_ENV === 'production') app.use(securityLock);
-for (const [name, router] of Object.entries({ auth, salons, staff, services, sales, appointments, attendance, clients, dashboard, expenses, inventory, ledger, purchases, reports, salary, maintenance, zkteco })) {
+for (const [name, router] of Object.entries({ 
+  auth, salons, staff, services, sales, appointments, attendance, clients, 
+  dashboard, expenses, inventory, ledger, purchases, reports, salary, maintenance, zkteco,
+  'payment-accounts': paymentAccounts
+})) {
   app.use(`/api/${name}`, router);
 }
 app.use((_req, res) => { res.status(404).json({ message: 'Endpoint not found' }); });

@@ -1,35 +1,42 @@
 import { Router } from 'express';
 import { db } from '../db';
-import { purchases, inventoryItems, inventoryTransactions, ledgerEntries, vendors, salons } from '../db/schema';
+import { purchases, inventoryItems, inventoryTransactions, ledgerEntries, vendors, salons, paymentAccounts } from '../db/schema';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { checkSubscription } from '../middleware/subscription';
 import { eq, and, desc, sql } from 'drizzle-orm';
 
 const router = Router();
 
-// Record a Purchase
 router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscription, async (req: AuthRequest, res) => {
   const salonId = req.user.role === 'SUPER_ADMIN' ? (req.body.salonId || req.query.salonId || req.user.salonId) : req.user.salonId;
-  const { vendorId, total, amountPaid, paymentMethod, items, notes, date } = req.body;
+  const { vendorId, total, amountPaid, paymentMethod, paymentAccountId, paymentBreakdown, items, notes, date } = req.body;
 
   try {
     const result = await db.transaction(async (tx) => {
-      // 1. Create Purchase record
+      let matchedAccount: any = null;
+      if (paymentAccountId) {
+        matchedAccount = await tx.query.paymentAccounts.findFirst({
+          where: and(
+            eq(paymentAccounts.id, paymentAccountId),
+            eq(paymentAccounts.salonId, salonId as string)
+          )
+        });
+      }
+
       const [newPurchase] = await tx.insert(purchases).values({
         salonId: salonId as string,
         vendorId,
         total: total.toString(),
         amountPaid: amountPaid.toString(),
         paymentMethod,
+        paymentAccountId: matchedAccount?.id || paymentAccountId || null,
+        paymentBreakdown: paymentBreakdown ? (typeof paymentBreakdown === 'string' ? paymentBreakdown : JSON.stringify(paymentBreakdown)) : null,
         notes,
         date: date ? new Date(date) : new Date(),
       }).returning();
 
-
-      // 2. Update Inventory Stock and record Transactions
       if (items && items.length > 0) {
         for (const item of items) {
-          // Fetch previous stock level and unit price to calculate Weighted Average Cost (WAC)
           const currentItemRes = await tx.select({
             stockQuantity: inventoryItems.stockQuantity,
             unitPrice: inventoryItems.unitPrice
@@ -56,7 +63,7 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
           await tx.update(inventoryItems)
             .set({ 
               stockQuantity: sql`${inventoryItems.stockQuantity} + ${item.quantity.toString()}`,
-              unitPrice: newUnitPrice.toFixed(2) // Update using Weighted Average Cost (WAC)
+              unitPrice: newUnitPrice.toFixed(2)
             })
             .where(and(eq(inventoryItems.id, item.id), eq(inventoryItems.salonId, salonId as string)));
 
@@ -70,7 +77,6 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
         }
       }
 
-      // 3. Handle Ledger for Khata (Double Entry)
       const methodUpper = (paymentMethod || 'CASH').toUpperCase();
       const totalPaidNum = parseFloat(amountPaid || '0');
       let cashPaid = 0;
@@ -88,8 +94,9 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
         cashPaid = totalPaidNum;
       }
 
+      const resolvedAccountName = matchedAccount?.accountName || null;
+
       if (vendorId) {
-        // Step A: Record the total purchase value (Debt increase)
         await tx.insert(ledgerEntries).values({
           salonId: salonId as string,
           vendorId,
@@ -101,7 +108,6 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
           date: date ? new Date(date) : new Date(),
         });
 
-        // Step B: Record the cash and online payments made (Debt reduction)
         if (cashPaid > 0) {
           const cashNotes = JSON.stringify({
             paymentMethod: 'CASH',
@@ -124,7 +130,9 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
           const onlineMethod = methodUpper === 'SPLIT' || methodUpper === 'CASH' ? 'ONLINE' : methodUpper;
           const onlineNotes = JSON.stringify({
             paymentMethod: onlineMethod,
-            userNotes: `Payment for Purchase (${onlineMethod}) #${newPurchase.id.substring(0, 8)}`
+            paymentAccountId: matchedAccount?.id || paymentAccountId || undefined,
+            paymentAccountName: resolvedAccountName || undefined,
+            userNotes: `Payment for Purchase (${onlineMethod}${resolvedAccountName ? ` - ${resolvedAccountName}` : ''}) #${newPurchase.id.substring(0, 8)}`
           });
 
           await tx.insert(ledgerEntries).values({
@@ -139,20 +147,17 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
           });
         }
 
-        // Step C: Update Vendor Global Balance
         const balanceImpact = parseFloat(total) - (cashPaid + onlinePaid);
         await tx.update(vendors)
           .set({ balance: sql`${vendors.balance} - ${balanceImpact.toString()}` })
           .where(eq(vendors.id, vendorId));
 
-        // Step D: Update Salon Cash Balance (Deduct cash portion)
         if (cashPaid > 0) {
           await tx.update(salons)
             .set({ cashBalance: sql`GREATEST(0, ${salons.cashBalance}::numeric - ${cashPaid.toString()}::numeric)` })
             .where(eq(salons.id, salonId as string));
         }
       } else {
-        // Anonymous Cash/Online Purchase
         if (cashPaid > 0) {
           const cashNotes = JSON.stringify({
             paymentMethod: 'CASH',
@@ -179,7 +184,9 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
           const onlineMethod = methodUpper === 'SPLIT' || methodUpper === 'CASH' ? 'ONLINE' : methodUpper;
           const onlineNotes = JSON.stringify({
             paymentMethod: onlineMethod,
-            userNotes: `Purchase (${onlineMethod}): ${notes || 'N/A'}`
+            paymentAccountId: matchedAccount?.id || paymentAccountId || undefined,
+            paymentAccountName: resolvedAccountName || undefined,
+            userNotes: `Purchase (${onlineMethod}${resolvedAccountName ? ` - ${resolvedAccountName}` : ''}): ${notes || 'N/A'}`
           });
 
           await tx.insert(ledgerEntries).values({
@@ -205,7 +212,6 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
   }
 });
 
-// List Purchases
 router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscription, async (req: AuthRequest, res) => {
   const salonId = req.user.role === 'SUPER_ADMIN' ? (req.query.salonId as string) : req.user.salonId;
   try {
@@ -213,7 +219,8 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscrip
       where: eq(purchases.salonId, salonId as string),
       orderBy: [desc(purchases.createdAt)],
       with: {
-        vendor: true
+        vendor: true,
+        paymentAccount: true
       }
     });
     res.json(allPurchases);

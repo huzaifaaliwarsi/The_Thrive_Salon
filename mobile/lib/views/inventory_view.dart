@@ -11,6 +11,8 @@ import '../providers/ledger_provider.dart';
 import '../providers/dashboard_provider.dart';
 import '../providers/reports_provider.dart';
 import '../view_models/dashboard_view_model.dart';
+import '../models/payment_account.dart';
+import '../providers/payment_accounts_provider.dart';
 
 const _kPrimary = Color(0xFF6A11CB);
 const _kDark = Color(0xFF1B1B3A);
@@ -586,6 +588,7 @@ class _InventoryViewState extends ConsumerState<InventoryView> with SingleTicker
     String type = 'IN';
     String paymentMethod = 'CASH';
     String? selectedVendorId = item['vendorId'];
+    String? selectedPaymentAccountId;
     bool isSaving = false;
 
     showDialog(
@@ -723,6 +726,91 @@ class _InventoryViewState extends ConsumerState<InventoryView> with SingleTicker
                       });
                     },
                   ),
+                  if (paymentMethod == 'ONLINE' || paymentMethod == 'SPLIT') ...[
+                    const SizedBox(height: 12),
+                    Consumer(
+                      builder: (context, ref, _) {
+                        final accountsAsync = ref.watch(paymentAccountsProvider);
+                        final accounts = accountsAsync.maybeWhen(
+                          data: (list) => list.where((a) => a.isActive).toList(),
+                          orElse: () => <PaymentAccount>[],
+                        );
+
+                        if (accounts.isEmpty) {
+                          return Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.amber.shade300),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(LucideIcons.alertTriangle, color: Color(0xFFD97706), size: 18),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'No active bank accounts found. Please configure in Settings > Payment Accounts.',
+                                    style: GoogleFonts.outfit(fontSize: 12, color: const Color(0xFF92400E)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+
+                        if (selectedPaymentAccountId == null && accounts.isNotEmpty) {
+                          selectedPaymentAccountId = accounts.first.id;
+                        }
+
+                        return DropdownButtonFormField<String>(
+                          value: selectedPaymentAccountId,
+                          style: GoogleFonts.outfit(fontSize: 14, color: Colors.black),
+                          decoration: InputDecoration(
+                            labelText: paymentMethod == 'SPLIT' ? 'Online Bank Account (for split portion) *' : 'Select Bank / Wallet Account *',
+                            prefixIcon: Icon(LucideIcons.landmark, size: 18, color: _kPrimary.withValues(alpha: 0.5)),
+                            filled: true,
+                            fillColor: _kBg,
+                            contentPadding: const EdgeInsets.fromLTRB(12, 24, 12, 10),
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide.none),
+                            labelStyle: GoogleFonts.outfit(fontSize: 14, color: Colors.black38),
+                          ),
+                          items: accounts.map((acc) {
+                            return DropdownMenuItem<String>(
+                              value: acc.id,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(acc.accountName, style: GoogleFonts.outfit(fontWeight: FontWeight.w600)),
+                                  if (acc.accountTitle != null && acc.accountTitle!.isNotEmpty) ...[
+                                    const SizedBox(width: 6),
+                                    Text('(${acc.accountTitle})', style: GoogleFonts.outfit(fontSize: 12, color: Colors.black54)),
+                                  ],
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: _kPrimary.withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      acc.type,
+                                      style: GoogleFonts.outfit(fontSize: 9, fontWeight: FontWeight.bold, color: _kPrimary),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: (v) {
+                            setDialogState(() => selectedPaymentAccountId = v);
+                          },
+                        );
+                      },
+                    ),
+                  ],
                   if (paymentMethod == 'SPLIT') ...[
                     const SizedBox(height: 12),
                     Row(
@@ -900,6 +988,7 @@ class _InventoryViewState extends ConsumerState<InventoryView> with SingleTicker
                           'total': total,
                           'amountPaid': amountPaid,
                           'paymentMethod': chosenPaymentMethod,
+                          'paymentAccountId': (chosenPaymentMethod == 'ONLINE' || (chosenPaymentMethod == 'SPLIT' && onlineAmt > 0)) ? selectedPaymentAccountId : null,
                           'cashAmount': cashAmt,
                           'onlineAmount': onlineAmt,
                           'notes': notesController.text.isEmpty ? 'Purchase of ${item['name']}' : notesController.text,
@@ -922,6 +1011,7 @@ class _InventoryViewState extends ConsumerState<InventoryView> with SingleTicker
                       ref.invalidate(reportsProvider);
                       ref.invalidate(dashboardMetricsProvider);
                       ref.invalidate(dashboardViewModelProvider);
+                      ref.invalidate(paymentAccountsProvider);
                       ref.read(inventoryProvider.notifier).fetchItems();
                       if (context.mounted) Navigator.pop(context);
                     } catch (e) {

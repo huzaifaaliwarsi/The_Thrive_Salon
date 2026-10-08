@@ -947,4 +947,48 @@ class ApiService {
       throw Exception(_handleError(e, 'Failed to update ZKTeco config'));
     }
   }
+
+  Future<List<dynamic>> getPaymentAccounts({bool includeInactive = false, String? salonId}) async {
+    try {
+      final response = await _dio.get('/api/payment-accounts', queryParameters: {
+        if (includeInactive) 'all': 'true',
+        if (salonId != null) 'salonId': salonId,
+      });
+      final processed = _processData(response.data);
+      if (processed is List) return processed;
+      return [];
+    } on DioException catch (e) {
+      throw Exception(_handleError(e, 'Failed to fetch payment accounts'));
+    }
+  }
+
+  Future<Map<String, dynamic>> createPaymentAccount(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post('/api/payment-accounts', data: data);
+      return _processData(response.data);
+    } on DioException catch (e) {
+      throw Exception(_handleError(e, 'Failed to create payment account'));
+    }
+  }
+
+  Future<Map<String, dynamic>> updatePaymentAccount(String id, Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.put('/api/payment-accounts/$id', data: data);
+      return _processData(response.data);
+    } on DioException catch (e) {
+      throw Exception(_handleError(e, 'Failed to update payment account'));
+    }
+  }
+
+  Future<Map<String, dynamic>> deletePaymentAccount(String id, {bool permanent = false}) async {
+    try {
+      final response = await _dio.delete(
+        '/api/payment-accounts/$id',
+        queryParameters: permanent ? {'permanent': 'true'} : null,
+      );
+      return _processData(response.data);
+    } on DioException catch (e) {
+      throw Exception(_handleError(e, 'Failed to delete payment account'));
+    }
+  }
 }

@@ -8,6 +8,8 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../config/api_config.dart';
 import '../services/api_service.dart';
 import '../providers/auth_provider.dart';
+import '../providers/payment_accounts_provider.dart';
+import 'payment_accounts_settings_view.dart';
 
 class SalonSettingsView extends ConsumerStatefulWidget {
   const SalonSettingsView({super.key});
@@ -304,6 +306,10 @@ class _SalonSettingsViewState extends ConsumerState<SalonSettingsView> {
             const SizedBox(height: 32),
             const Divider(),
             const SizedBox(height: 24),
+            _buildPaymentAccountsSection(),
+            const SizedBox(height: 32),
+            const Divider(),
+            const SizedBox(height: 24),
             _buildZktecoIntegrationSection(),
             const SizedBox(height: 32),
             const Divider(),
@@ -363,6 +369,94 @@ class _SalonSettingsViewState extends ConsumerState<SalonSettingsView> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildPaymentAccountsSection() {
+    final accountsAsync = ref.watch(paymentAccountsProvider);
+    final activeCount = accountsAsync.maybeWhen(
+      data: (list) => list.where((a) => a.isActive).length,
+      orElse: () => 0,
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF8B5CF6).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(LucideIcons.landmark, color: Color(0xFF8B5CF6), size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Payment & Bank Accounts',
+                      style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 16, color: const Color(0xFF1E293B)),
+                    ),
+                    Text(
+                      'Configure Meezan Bank, JazzCash, EasyPaisa & other accounts for POS checkout',
+                      style: GoogleFonts.outfit(fontSize: 12, color: Colors.black45),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF8B5CF6).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '$activeCount Active',
+                  style: GoogleFonts.outfit(fontSize: 11, color: const Color(0xFF8B5CF6), fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Link multiple bank accounts and mobile wallets. Cashiers can split sales across multiple accounts and track individual balances in the drawer.',
+            style: GoogleFonts.outfit(fontSize: 12, color: Colors.black54, height: 1.4),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              icon: const Icon(LucideIcons.creditCard, size: 16, color: Colors.white),
+              label: Text(
+                'Manage Payment Accounts',
+                style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF8B5CF6),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const PaymentAccountsSettingsView()),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

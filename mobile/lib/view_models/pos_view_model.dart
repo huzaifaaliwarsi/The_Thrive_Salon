@@ -14,15 +14,16 @@ class POSState {
   final String paymentMethod;
   final double? customCommissionRate;
   final double discountValue;
-  final String discountType; // 'FLAT' or 'PERCENT'
+  final String discountType;
   final double taxRate;
   final double? amountPaid;
   final bool isLoading;
-  // Added to track service names for display in cart since SaleItem only has serviceId
   final Map<String, String> serviceNameMap; 
   final String? draftId;
   final String? appointmentId;
   final String? selectedStaffId;
+  final String? selectedPaymentAccountId;
+  final List<Map<String, dynamic>>? onlineBreakdown;
 
   POSState({
     this.cart = const [],
@@ -35,13 +36,15 @@ class POSState {
     this.customCommissionRate,
     this.discountValue = 0,
     this.discountType = 'FLAT',
-    this.taxRate = 0.0, // Default VAT 0%
+    this.taxRate = 0.0,
     this.amountPaid,
     this.isLoading = false,
     this.serviceNameMap = const {},
     this.draftId,
     this.appointmentId,
     this.selectedStaffId,
+    this.selectedPaymentAccountId,
+    this.onlineBreakdown,
   });
 
   double get subtotal => cart.fold(0, (sum, item) => sum + (item.isInternal ? 0.0 : (item.price * item.quantity)));
@@ -82,6 +85,10 @@ class POSState {
     String? draftId,
     String? appointmentId,
     String? selectedStaffId,
+    String? selectedPaymentAccountId,
+    bool clearSelectedPaymentAccountId = false,
+    List<Map<String, dynamic>>? onlineBreakdown,
+    bool clearOnlineBreakdown = false,
   }) {
     return POSState(
       cart: cart ?? this.cart,
@@ -101,6 +108,8 @@ class POSState {
       draftId: draftId ?? this.draftId,
       appointmentId: appointmentId ?? this.appointmentId,
       selectedStaffId: selectedStaffId ?? this.selectedStaffId,
+      selectedPaymentAccountId: clearSelectedPaymentAccountId ? null : (selectedPaymentAccountId ?? this.selectedPaymentAccountId),
+      onlineBreakdown: clearOnlineBreakdown ? null : (onlineBreakdown ?? this.onlineBreakdown),
     );
   }
 }
@@ -121,8 +130,6 @@ class POSNotifier extends StateNotifier<POSState> {
   void addCustomPackageToCart(Service packageService, List<Service> customItems, double packagePrice) {
     final cart = List<SaleItem>.from(state.cart);
     final newMap = Map<String, String>.from(state.serviceNameMap);
-    
-    // Add as a combined package line item or individual custom items
     final itemNames = customItems.map((s) => s.name).join(', ');
     final pName = '${packageService.name} ($itemNames)';
     newMap[packageService.id] = pName;
@@ -140,7 +147,6 @@ class POSNotifier extends StateNotifier<POSState> {
 
   void _addSingleItem(Service service) {
     final cart = List<SaleItem>.from(state.cart);
-    // Group by both serviceId and null staffId so different staff get different line items
     final index = cart.indexWhere((item) => item.serviceId == service.id && item.staffId == null);
     
     final newMap = Map<String, String>.from(state.serviceNameMap);
@@ -161,7 +167,7 @@ class POSNotifier extends StateNotifier<POSState> {
         serviceName: service.name,
         price: double.parse(service.price),
         quantity: 1,
-        staffId: null, // Initialize with no staff
+        staffId: null,
       ));
     }
     state = state.copyWith(cart: cart, serviceNameMap: newMap);
@@ -224,7 +230,25 @@ class POSNotifier extends StateNotifier<POSState> {
 
   void setCategory(String category) => state = state.copyWith(selectedCategory: category);
   void setSearch(String query) => state = state.copyWith(searchQuery: query);
-  void setPaymentMethod(String method) => state = state.copyWith(paymentMethod: method);
+  void setPaymentMethod(String method) {
+    if (method != 'ONLINE') {
+      state = state.copyWith(
+        paymentMethod: method,
+        clearSelectedPaymentAccountId: true,
+        clearOnlineBreakdown: true,
+      );
+    } else {
+      state = state.copyWith(paymentMethod: method);
+    }
+  }
+  void setSelectedPaymentAccountId(String? id) => state = state.copyWith(
+    selectedPaymentAccountId: id,
+    clearSelectedPaymentAccountId: id == null,
+  );
+  void setOnlineBreakdown(List<Map<String, dynamic>>? breakdown) => state = state.copyWith(
+    onlineBreakdown: breakdown,
+    clearOnlineBreakdown: breakdown == null,
+  );
   void setCustomerPhone(String phone) => state = state.copyWith(customerPhone: phone);
   void setCustomerName(String name) => state = state.copyWith(customerName: name);
   void setCustomerSource(String source) => state = state.copyWith(customerSource: source);
@@ -247,6 +271,12 @@ class POSNotifier extends StateNotifier<POSState> {
   }
 
   void loadDraft(Sale draft, Map<String, String> serviceNames) {
+    List<Map<String, dynamic>>? breakdownList;
+    if (draft.paymentBreakdown is List) {
+      breakdownList = (draft.paymentBreakdown as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    }
     state = POSState(
       cart: draft.items,
       customerPhone: draft.customerPhone ?? '',
@@ -259,6 +289,8 @@ class POSNotifier extends StateNotifier<POSState> {
       amountPaid: draft.amountPaid,
       serviceNameMap: serviceNames,
       draftId: draft.id,
+      selectedPaymentAccountId: draft.paymentAccountId,
+      onlineBreakdown: breakdownList,
     );
   }
 

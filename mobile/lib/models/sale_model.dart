@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class Sale {
   final String id;
   final String? customerPhone;
@@ -13,9 +15,11 @@ class Sale {
   final DateTime createdAt;
   final List<SaleItem> items;
   final bool isSynced;
-  final String? status; // ACTIVE, VOID, or DRAFT
+  final String? status;
   final double? commissionRate;
   final double? amountPaid;
+  final String? paymentAccountId;
+  final dynamic paymentBreakdown;
 
   Sale({
     required this.id,
@@ -35,6 +39,8 @@ class Sale {
     this.status = 'ACTIVE',
     this.commissionRate,
     this.amountPaid,
+    this.paymentAccountId,
+    this.paymentBreakdown,
   });
 
   factory Sale.fromJson(Map<String, dynamic> json) {
@@ -53,6 +59,18 @@ class Sale {
       status: json['status'] ?? 'ACTIVE',
       commissionRate: double.tryParse(json['commissionRate']?.toString() ?? '0'),
       amountPaid: json['amountPaid'] != null ? double.tryParse(json['amountPaid'].toString()) : null,
+      paymentAccountId: json['paymentAccountId']?.toString(),
+      paymentBreakdown: (() {
+        final raw = json['paymentBreakdown'];
+        if (raw is String && (raw.startsWith('[') || raw.startsWith('{'))) {
+          try {
+            return jsonDecode(raw);
+          } catch (_) {
+            return raw;
+          }
+        }
+        return raw;
+      })(),
       createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? '')?.toLocal() ?? DateTime.now(),
       items: (json['items'] as List?)?.map((i) => SaleItem.fromJson(i)).toList() ?? 
              (json['saleItems'] as List?)?.map((i) => SaleItem.fromJson(i)).toList() ?? [],
@@ -75,6 +93,8 @@ class Sale {
     'status': status,
     'commissionRate': commissionRate,
     'amountPaid': amountPaid,
+    'paymentAccountId': paymentAccountId,
+    'paymentBreakdown': paymentBreakdown,
     'createdAt': createdAt.toIso8601String(),
     'items': items.map((i) => i.toJson()).toList(),
   };

@@ -6,6 +6,8 @@ import 'dart:convert';
 import 'dart:math' as math;
 import '../../../providers/currency_provider.dart';
 import '../../../providers/ledger_provider.dart';
+import '../../../models/payment_account.dart';
+import '../../../providers/payment_accounts_provider.dart';
 import '../../../utils/format_helper.dart';
 
 const _kDark = Color(0xFF1E293B);
@@ -67,14 +69,11 @@ class DrawerTabWidget extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final currency = ref.watch(currencyProvider);
-    // Fetch ledger with includeOnline: true so all online expenses, vendor payouts, and staff salaries are tracked
     final ledgerAsync = ref.watch(ledgerProvider(LedgerParams(salonId: salonId, limit: 1000, includeOnline: true)));
 
     return ledgerAsync.when(
       data: (ledgerData) {
         final List<dynamic> allLedgerEntries = ledgerData['entries'] ?? [];
-        
-        // Filter ledger entries within date range locally
         final entries = allLedgerEntries.where((entry) {
           final dateStr = entry['date']?.toString() ?? entry['createdAt']?.toString() ?? '';
           final entryDate = DateTime.tryParse(dateStr);
@@ -261,7 +260,6 @@ class DrawerTabWidget extends ConsumerWidget {
           vatReceivable += unpaidTax;
         }
 
-        // 1. Operating Expenses Outflows
         double expenseCash = 0;
         double expenseOnline = 0;
         
@@ -280,7 +278,6 @@ class DrawerTabWidget extends ConsumerWidget {
           }
         }
 
-        // 2. Supplier Payments Outflows
         double supplierCash = 0;
         double supplierOnline = 0;
 
@@ -298,7 +295,6 @@ class DrawerTabWidget extends ConsumerWidget {
           }
         }
 
-        // 3. Staff Salaries & Advances Paid Outflows
         double salaryCash = 0;
         double salaryOnline = 0;
 
@@ -317,7 +313,6 @@ class DrawerTabWidget extends ConsumerWidget {
           }
         }
 
-        // 4. Old Receivables Collected Inflows
         double collectedReceivablesCash = 0;
         double collectedReceivablesOnline = 0;
 
@@ -333,7 +328,7 @@ class DrawerTabWidget extends ConsumerWidget {
 
             final userNotes = struct?['userNotes']?.toString() ?? notes;
             if (userNotes.contains('Amount Paid at Sale') && entry['saleId'] != null) {
-              continue; // Skip initial POS payment to prevent double counting
+              continue;
             }
 
             final amt = double.tryParse(entry['amount']?.toString() ?? '0') ?? 0.0;
@@ -348,7 +343,6 @@ class DrawerTabWidget extends ConsumerWidget {
           }
         }
 
-        // 5. Refunds & Void Reversals Outflows
         double voidReversalCash = 0;
         double voidReversalOnline = 0;
 
@@ -366,7 +360,6 @@ class DrawerTabWidget extends ConsumerWidget {
           }
         }
 
-        // 6. Reconciliation Inflows / Outflows
         double reconSurplusCash = 0;
         double reconShortageCash = 0;
 
@@ -382,7 +375,6 @@ class DrawerTabWidget extends ConsumerWidget {
           }
         }
 
-        // Drawer Balances calculation
         final double grossCash = serviceCash + productCash;
         final double grossOnline = serviceOnline + productOnline;
         final double grossRec = serviceReceivable + productReceivable;
@@ -508,6 +500,10 @@ class DrawerTabWidget extends ConsumerWidget {
           ],
         );
 
+        final activeAccounts = ref.watch(activePaymentAccountsProvider);
+        final Map<String, dynamic> onlineBreakdownMap =
+            (backendDrawerBalances?['onlineBreakdown'] as Map<String, dynamic>?) ?? {};
+
         return ListView(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
           children: [
@@ -541,6 +537,15 @@ class DrawerTabWidget extends ConsumerWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 16),
+            _buildOnlineAccountsSection(
+              context,
+              currency,
+              activeAccounts,
+              onlineBreakdownMap,
+              balOnline,
+              isWide,
+            ),
             const SizedBox(height: 20),
             mainReportCard,
           ],
@@ -548,6 +553,256 @@ class DrawerTabWidget extends ConsumerWidget {
       },
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (err, _) => Center(child: Text('Error loading Galla Drawer: $err')),
+    );
+  }
+
+  static Widget _buildOnlineAccountsSection(
+    BuildContext context,
+    String currency,
+    List<PaymentAccount> accounts,
+    Map<String, dynamic> backendBreakdown,
+    double totalOnlineBalance,
+    bool isWide,
+  ) {
+    final Map<String, double> mergedBalances = {};
+    for (final acc in accounts) {
+      double bal = 0.0;
+      if (backendBreakdown.containsKey(acc.accountName)) {
+        bal = (backendBreakdown[acc.accountName] as num?)?.toDouble() ?? 0.0;
+      } else if (backendBreakdown.containsKey(acc.id)) {
+        bal = (backendBreakdown[acc.id] as num?)?.toDouble() ?? 0.0;
+      }
+      mergedBalances[acc.id] = bal;
+    }
+
+    final List<Map<String, dynamic>> displayItems = [];
+    for (final acc in accounts) {
+      displayItems.add({
+        'name': acc.accountName,
+        'type': acc.type,
+        'subtitle': '${acc.accountTitle ?? ''} ${acc.accountNumber ?? ''}'.trim(),
+        'balance': mergedBalances[acc.id] ?? 0.0,
+      });
+    }
+
+    for (final entry in backendBreakdown.entries) {
+      final name = entry.key;
+      final exists = displayItems.any((item) => item['name'] == name);
+      if (!exists) {
+        displayItems.add({
+          'name': name,
+          'type': 'ONLINE',
+          'subtitle': 'Historical Channel',
+          'balance': (entry.value as num?)?.toDouble() ?? 0.0,
+        });
+      }
+    }
+
+    if (displayItems.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.black12),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: _kPrimary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(LucideIcons.landmark, color: _kPrimary, size: 20),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('No Online Accounts Configured', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 14, color: _kDark)),
+                  Text('Add Meezan, JazzCash, or bank accounts under Salon Settings to track individual balances.', style: GoogleFonts.outfit(fontSize: 11.5, color: Colors.black45)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final int crossAxisCount = isWide ? math.min(displayItems.length, 4) : 1;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 10)],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: _kPrimary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(LucideIcons.landmark, size: 18, color: _kPrimary),
+                  ),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Online Accounts Breakdown',
+                        style: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.bold, color: _kDark),
+                      ),
+                      Text(
+                        'Live balance distributed across active bank accounts & wallets',
+                        style: GoogleFonts.outfit(fontSize: 11, color: Colors.black38),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: _kPrimary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _kPrimary.withValues(alpha: 0.2)),
+                ),
+                child: Text(
+                  '${displayItems.length} Accounts',
+                  style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.bold, color: _kPrimary),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (crossAxisCount == 1) {
+                return Column(
+                  children: displayItems.map((item) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _buildAccountCardItem(item, currency, totalOnlineBalance),
+                    );
+                  }).toList(),
+                );
+              }
+              final cardWidth = (constraints.maxWidth - (crossAxisCount - 1) * 12) / crossAxisCount;
+              return Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: displayItems.map((item) {
+                  return SizedBox(
+                    width: cardWidth,
+                    child: _buildAccountCardItem(item, currency, totalOnlineBalance),
+                  );
+                }).toList(),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  static Widget _buildAccountCardItem(
+    Map<String, dynamic> item,
+    String currency,
+    double totalOnlineBalance,
+  ) {
+    final name = item['name']?.toString() ?? 'Account';
+    final type = item['type']?.toString() ?? 'BANK';
+    final subtitle = item['subtitle']?.toString() ?? '';
+    final balance = (item['balance'] as num?)?.toDouble() ?? 0.0;
+    final isWallet = type.toUpperCase().contains('WALLET') || name.toLowerCase().contains('jazz') || name.toLowerCase().contains('easy');
+    final icon = isWallet ? LucideIcons.smartphone : LucideIcons.landmark;
+    final accent = isWallet ? const Color(0xFFF97316) : _kPrimary;
+    final share = totalOnlineBalance > 0 && balance > 0 ? (balance / totalOnlineBalance) * 100 : 0.0;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, size: 14, color: accent),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  name,
+                  style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 13, color: _kDark),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.black12),
+                ),
+                child: Text(
+                  type,
+                  style: GoogleFonts.outfit(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.black54),
+                ),
+              ),
+            ],
+          ),
+          if (subtitle.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              style: GoogleFonts.outfit(fontSize: 10.5, color: Colors.black45),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                '$currency ${formatAmount(balance)}',
+                style: GoogleFonts.outfit(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: balance < 0 ? Colors.redAccent : _kDark,
+                ),
+              ),
+              if (share > 0)
+                Text(
+                  '${share.toStringAsFixed(0)}% of total',
+                  style: GoogleFonts.outfit(fontSize: 10, fontWeight: FontWeight.w600, color: _kPrimary),
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

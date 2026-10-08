@@ -339,6 +339,14 @@ class _SalesTabWidgetState extends ConsumerState<SalesTabWidget> {
                     Color chipBg = const Color(0xFFF1F5F9);
                     Color chipFg = const Color(0xFF475569);
                     String methodText = isOnlineMethod ? 'Online' : 'Cash';
+                    if (isOnlineMethod) {
+                      final breakdown = sale['paymentBreakdown'];
+                      if (breakdown != null && breakdown is List && breakdown.isNotEmpty) {
+                        methodText = 'Split (${breakdown.length})';
+                      } else if (sale['paymentAccount'] != null && sale['paymentAccount']['accountName'] != null) {
+                        methodText = sale['paymentAccount']['accountName'].toString();
+                      }
+                    }
                     String statusLabel = 'PAID ($methodText)';
 
                     if (amountPaidVal <= 0.01) {

@@ -1163,6 +1163,7 @@ router.get('/summary', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']
       totalSales,
       totalBillings,
       onlinePayments,
+      onlineBreakdown: drawerBalances?.onlineBreakdown || {},
       productCogs,
       totalInventoryCost: productCogs,
       stockPurchasesValue,
@@ -1321,7 +1322,6 @@ router.get('/export', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSu
     );
     if (queryStaffId) salesWhere = and(salesWhere, eq(sales.staffId, queryStaffId as string))!;
 
-    // 5. Raw Data (For table display in frontend)
     const salesQuery = await db.query.sales.findMany({
       where: salesWhere,
       orderBy: [desc(sales.createdAt)],
@@ -1329,7 +1329,8 @@ router.get('/export', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSu
         saleItems: {
           with: { service: true, product: true, staff: true }
         },
-        staff: true
+        staff: true,
+        paymentAccount: true
       }
     });
 

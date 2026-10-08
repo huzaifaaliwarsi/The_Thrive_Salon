@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db';
-import { sales, saleItems, staff, clients, inventoryItems, inventoryTransactions, ledgerEntries, salons } from '../db/schema';
+import { sales, saleItems, staff, clients, inventoryItems, inventoryTransactions, ledgerEntries, salons, paymentAccounts } from '../db/schema';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { checkSubscription } from '../middleware/subscription';
 import { eq, and, sql, desc, gte, lte, isNotNull, or, inArray, ne } from 'drizzle-orm';
@@ -10,9 +10,47 @@ const uuidValidate = (uuid: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 
 const router = Router();
 
-// Create Sale (Staff and Owner)
 router.post('/', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), checkSubscription, async (req: AuthRequest, res) => {
-  const { id: clientProvidedId, customerPhone: rawPhone, customerName, customerSource, subtotal, discount, total, paymentMethod, amountPaid, items, staffId: providedStaffId, customCommissionRate, taxRate, status, createdAt } = req.body;
+  const {
+    id: clientProvidedId,
+    customerPhone: rawPhone,
+    customerName,
+    customerSource,
+    subtotal,
+    discount,
+    total,
+    paymentMethod,
+    amountPaid,
+    items,
+    staffId: providedStaffId,
+    customCommissionRate,
+    taxRate,
+    status,
+    createdAt,
+    paymentAccountId: providedPaymentAccountId,
+    onlineBreakdown,
+    paymentBreakdown: rawPaymentBreakdown
+  } = req.body;
+
+  let formattedPaymentBreakdown: string | null = null;
+  if (Array.isArray(onlineBreakdown) && onlineBreakdown.length > 0) {
+    formattedPaymentBreakdown = JSON.stringify(onlineBreakdown);
+  } else if (typeof rawPaymentBreakdown === 'string' && rawPaymentBreakdown.trim()) {
+    formattedPaymentBreakdown = rawPaymentBreakdown.trim();
+  } else if (rawPaymentBreakdown && typeof rawPaymentBreakdown === 'object') {
+    formattedPaymentBreakdown = JSON.stringify(rawPaymentBreakdown);
+  }
+
+  let finalPaymentAccountId: string | null = null;
+  if (providedPaymentAccountId && uuidValidate(providedPaymentAccountId)) {
+    finalPaymentAccountId = providedPaymentAccountId;
+  } else if (Array.isArray(onlineBreakdown) && onlineBreakdown.length === 1) {
+    const singleId = onlineBreakdown[0]?.accountId || onlineBreakdown[0]?.paymentAccountId;
+    if (singleId && uuidValidate(singleId)) {
+      finalPaymentAccountId = singleId;
+    }
+  }
+
   const customerPhone = normalizePhone(rawPhone);
   let staffId = (providedStaffId && providedStaffId !== '' && providedStaffId !== 'null') ? providedStaffId : null;
   const salonId = req.user.salonId;
@@ -64,7 +102,6 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), che
     }) : null;
 
     const result = await db.transaction(async (tx) => {
-      // Create Sale record with commission snapshot
       const [newSale] = await tx.insert(sales).values({
         id: (clientProvidedId && uuidValidate(clientProvidedId)) ? clientProvidedId : undefined,
         customerPhone,
@@ -75,6 +112,8 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), che
         total: totalStr,
         amountPaid: paidAmount.toString(),
         paymentMethod,
+        paymentAccountId: finalPaymentAccountId,
+        paymentBreakdown: formattedPaymentBreakdown,
         staffId: staffId as string,
         salonId: salonId as string,
         commissionRate: commissionRate,
@@ -213,8 +252,6 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), che
           }
         }
 
-        // Record Double-Entry in Ledger
-        // Entry 1: Total Sale Bill
         await tx.insert(ledgerEntries).values({
           salonId: salonId as string,
           clientId: targetClientId,
@@ -227,7 +264,6 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), che
           date: newSale.createdAt,
         });
 
-        // Entry 2: Immediate cash/online payment received at sale
         if (paidAmount > 0) {
           const methodUpper = (paymentMethod || 'CASH').toUpperCase();
           let cashPaid = 0;
@@ -270,22 +306,92 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), che
 
           if (onlinePaid > 0) {
             const onlineMethod = methodUpper === 'SPLIT' || methodUpper === 'CASH' ? 'ONLINE' : methodUpper;
-            const onlineNotes = JSON.stringify({
-              paymentMethod: onlineMethod,
-              userNotes: `Amount Paid at Sale (${onlineMethod}) - Sale #${newSale.id.substring(0, 8)}`
-            });
+            let breakdownList: Array<{ accountId?: string; paymentAccountId?: string; accountName?: string; paymentAccountName?: string; amount?: number | string }> = [];
 
-            await tx.insert(ledgerEntries).values({
-              salonId: salonId as string,
-              clientId: targetClientId,
-              type: 'DEBIT',
-              amount: onlinePaid.toString(),
-              category: 'PAYMENT',
-              notes: onlineNotes,
-              personName: targetClientName,
-              saleId: newSale.id,
-              date: newSale.createdAt,
-            });
+            if (Array.isArray(onlineBreakdown) && onlineBreakdown.length > 0) {
+              breakdownList = onlineBreakdown;
+            } else if (formattedPaymentBreakdown) {
+              try {
+                const parsed = JSON.parse(formattedPaymentBreakdown);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  breakdownList = parsed;
+                }
+              } catch (_) {}
+            }
+
+            if (breakdownList.length > 0) {
+              for (const item of breakdownList) {
+                const itemAmt = parseFloat(item.amount?.toString() || '0');
+                if (itemAmt <= 0) continue;
+
+                const itemAccountId = item.accountId || item.paymentAccountId || null;
+                let itemAccountName = item.accountName || item.paymentAccountName || null;
+
+                if (itemAccountId && !itemAccountName) {
+                  const matchedAcc = await tx.query.paymentAccounts.findFirst({
+                    where: and(
+                      eq(paymentAccounts.id, itemAccountId),
+                      eq(paymentAccounts.salonId, salonId as string)
+                    )
+                  });
+                  if (matchedAcc) {
+                    itemAccountName = matchedAcc.accountName;
+                  }
+                }
+
+                const resolvedName = itemAccountName || 'Online';
+                const entryNotes = JSON.stringify({
+                  paymentMethod: 'ONLINE',
+                  paymentAccountId: itemAccountId || undefined,
+                  paymentAccountName: resolvedName,
+                  userNotes: `Amount Paid at Sale (${resolvedName}) - Sale #${newSale.id.substring(0, 8)}`
+                });
+
+                await tx.insert(ledgerEntries).values({
+                  salonId: salonId as string,
+                  clientId: targetClientId,
+                  type: 'DEBIT',
+                  amount: itemAmt.toString(),
+                  category: 'PAYMENT',
+                  notes: entryNotes,
+                  personName: targetClientName,
+                  saleId: newSale.id,
+                  date: newSale.createdAt,
+                });
+              }
+            } else {
+              let resolvedAccountName: string | null = null;
+              if (finalPaymentAccountId) {
+                const matchedAcc = await tx.query.paymentAccounts.findFirst({
+                  where: and(
+                    eq(paymentAccounts.id, finalPaymentAccountId),
+                    eq(paymentAccounts.salonId, salonId as string)
+                  )
+                });
+                if (matchedAcc) {
+                  resolvedAccountName = matchedAcc.accountName;
+                }
+              }
+
+              const entryNotes = JSON.stringify({
+                paymentMethod: onlineMethod,
+                paymentAccountId: finalPaymentAccountId || undefined,
+                paymentAccountName: resolvedAccountName || undefined,
+                userNotes: `Amount Paid at Sale (${resolvedAccountName || onlineMethod}) - Sale #${newSale.id.substring(0, 8)}`
+              });
+
+              await tx.insert(ledgerEntries).values({
+                salonId: salonId as string,
+                clientId: targetClientId,
+                type: 'DEBIT',
+                amount: onlinePaid.toString(),
+                category: 'PAYMENT',
+                notes: entryNotes,
+                personName: targetClientName,
+                saleId: newSale.id,
+                date: newSale.createdAt,
+              });
+            }
           }
         }
       }
@@ -394,14 +500,13 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), chec
         },
         staff: true,
         salon: true,
+        paymentAccount: true,
       },
       orderBy: (sales, { desc }) => [desc(sales.createdAt)],
     });
 
-    // Fetch ledger payment entries for all returned sales
     const saleIds = allSales.map(s => s.id);
-    let paymentsMap: Record<string, Array<{ amount: number; date: string; paymentMethod?: string; notes?: string }>> = {};
-
+    let paymentsMap: Record<string, Array<{ amount: number; date: string; paymentMethod?: string; paymentAccountId?: string; paymentAccountName?: string; notes?: string }>> = {};
 
     if (saleIds.length > 0) {
       const paymentEntries = await db.query.ledgerEntries.findMany({
@@ -416,12 +521,17 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), chec
         if (!paymentsMap[entry.saleId]) paymentsMap[entry.saleId] = [];
 
         let pMethod = 'CASH';
+        let pAccountId: string | undefined = undefined;
+        let pAccountName: string | undefined = undefined;
+
         if (entry.notes) {
           try {
             const trimmed = entry.notes.trim();
             if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
               const parsed = JSON.parse(trimmed);
               if (parsed.paymentMethod) pMethod = String(parsed.paymentMethod).toUpperCase();
+              if (parsed.paymentAccountId) pAccountId = parsed.paymentAccountId;
+              if (parsed.paymentAccountName) pAccountName = parsed.paymentAccountName;
             }
           } catch (_) {}
           if (pMethod === 'CASH' && (entry.notes.toUpperCase().includes('ONLINE') || entry.notes.toUpperCase().includes('CARD') || entry.notes.toUpperCase().includes('BANK') || entry.notes.toUpperCase().includes('UPI'))) {
@@ -433,10 +543,11 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), chec
           amount: parseFloat(entry.amount || '0'),
           date: entry.date ? new Date(entry.date).toISOString() : new Date().toISOString(),
           paymentMethod: pMethod,
+          paymentAccountId: pAccountId,
+          paymentAccountName: pAccountName,
           notes: entry.notes || '',
         });
       }
-
     }
 
     const salesWithPaymentStatus = allSales.map(s => {
@@ -706,10 +817,47 @@ router.patch('/:id/void', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), che
   }
 });
 
-// Update / Finalize Sale (Staff and Owner)
 router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), checkSubscription, async (req: AuthRequest, res) => {
   const id = req.params.id as string;
-  const { customerPhone: rawPhone, customerName, customerSource, subtotal, discount, total, paymentMethod, amountPaid, items, staffId: providedStaffId, customCommissionRate, taxRate, status, createdAt } = req.body;
+  const {
+    customerPhone: rawPhone,
+    customerName,
+    customerSource,
+    subtotal,
+    discount,
+    total,
+    paymentMethod,
+    amountPaid,
+    items,
+    staffId: providedStaffId,
+    customCommissionRate,
+    taxRate,
+    status,
+    createdAt,
+    paymentAccountId: providedPaymentAccountId,
+    onlineBreakdown,
+    paymentBreakdown: rawPaymentBreakdown
+  } = req.body;
+
+  let formattedPaymentBreakdown: string | null = null;
+  if (Array.isArray(onlineBreakdown) && onlineBreakdown.length > 0) {
+    formattedPaymentBreakdown = JSON.stringify(onlineBreakdown);
+  } else if (typeof rawPaymentBreakdown === 'string' && rawPaymentBreakdown.trim()) {
+    formattedPaymentBreakdown = rawPaymentBreakdown.trim();
+  } else if (rawPaymentBreakdown && typeof rawPaymentBreakdown === 'object') {
+    formattedPaymentBreakdown = JSON.stringify(rawPaymentBreakdown);
+  }
+
+  let finalPaymentAccountId: string | null = null;
+  if (providedPaymentAccountId && uuidValidate(providedPaymentAccountId)) {
+    finalPaymentAccountId = providedPaymentAccountId;
+  } else if (Array.isArray(onlineBreakdown) && onlineBreakdown.length === 1) {
+    const singleId = onlineBreakdown[0]?.accountId || onlineBreakdown[0]?.paymentAccountId;
+    if (singleId && uuidValidate(singleId)) {
+      finalPaymentAccountId = singleId;
+    }
+  }
+
   const customerPhone = normalizePhone(rawPhone);
   let staffId = (providedStaffId && providedStaffId !== '' && providedStaffId !== 'null') ? providedStaffId : null;
   const salonId = req.user.salonId;
@@ -770,7 +918,6 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), c
     }) : null;
 
     const result = await db.transaction(async (tx) => {
-      // Update Sale record
       await tx.update(sales)
         .set({
           customerPhone,
@@ -781,6 +928,8 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), c
           total: totalStr,
           amountPaid: paidAmount.toString(),
           paymentMethod,
+          paymentAccountId: finalPaymentAccountId !== null ? finalPaymentAccountId : undefined,
+          paymentBreakdown: formattedPaymentBreakdown !== null ? formattedPaymentBreakdown : undefined,
           staffId: staffId as string,
           commissionRate: commissionRate,
           taxRate: taxRateStr,
@@ -911,7 +1060,6 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), c
 
         const saleEntryDate = createdAt ? new Date(createdAt) : new Date();
 
-        // Ledger Entry 1: Total Sale Bill
         await tx.insert(ledgerEntries).values({
           salonId: salonId as string,
           clientId: targetClientId,
@@ -924,7 +1072,6 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), c
           date: saleEntryDate,
         });
 
-        // Ledger Entry 2: Immediate cash/online payment received at sale
         if (paidAmount > 0) {
           const methodUpper = (paymentMethod || 'CASH').toUpperCase();
           let cashPaid = 0;
@@ -967,32 +1114,102 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'STAFF', 'OWNER']), c
 
           if (onlinePaid > 0) {
             const onlineMethod = methodUpper === 'SPLIT' || methodUpper === 'CASH' ? 'ONLINE' : methodUpper;
-            const onlineNotes = JSON.stringify({
-              paymentMethod: onlineMethod,
-              userNotes: `Amount Paid at Sale (${onlineMethod}) - Sale #${id.substring(0, 8)}`
-            });
+            let breakdownList: Array<{ accountId?: string; paymentAccountId?: string; accountName?: string; paymentAccountName?: string; amount?: number | string }> = [];
 
-            await tx.insert(ledgerEntries).values({
-              salonId: salonId as string,
-              clientId: targetClientId,
-              type: 'DEBIT',
-              amount: onlinePaid.toString(),
-              category: 'PAYMENT',
-              notes: onlineNotes,
-              personName: targetClientName,
-              saleId: id as string,
-              date: saleEntryDate,
-            });
+            if (Array.isArray(onlineBreakdown) && onlineBreakdown.length > 0) {
+              breakdownList = onlineBreakdown;
+            } else if (formattedPaymentBreakdown) {
+              try {
+                const parsed = JSON.parse(formattedPaymentBreakdown);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  breakdownList = parsed;
+                }
+              } catch (_) {}
+            }
+
+            if (breakdownList.length > 0) {
+              for (const item of breakdownList) {
+                const itemAmt = parseFloat(item.amount?.toString() || '0');
+                if (itemAmt <= 0) continue;
+
+                const itemAccountId = item.accountId || item.paymentAccountId || null;
+                let itemAccountName = item.accountName || item.paymentAccountName || null;
+
+                if (itemAccountId && !itemAccountName) {
+                  const matchedAcc = await tx.query.paymentAccounts.findFirst({
+                    where: and(
+                      eq(paymentAccounts.id, itemAccountId),
+                      eq(paymentAccounts.salonId, salonId as string)
+                    )
+                  });
+                  if (matchedAcc) {
+                    itemAccountName = matchedAcc.accountName;
+                  }
+                }
+
+                const resolvedName = itemAccountName || 'Online';
+                const entryNotes = JSON.stringify({
+                  paymentMethod: 'ONLINE',
+                  paymentAccountId: itemAccountId || undefined,
+                  paymentAccountName: resolvedName,
+                  userNotes: `Amount Paid at Sale (${resolvedName}) - Sale #${id.substring(0, 8)}`
+                });
+
+                await tx.insert(ledgerEntries).values({
+                  salonId: salonId as string,
+                  clientId: targetClientId,
+                  type: 'DEBIT',
+                  amount: itemAmt.toString(),
+                  category: 'PAYMENT',
+                  notes: entryNotes,
+                  personName: targetClientName,
+                  saleId: id as string,
+                  date: saleEntryDate,
+                });
+              }
+            } else {
+              let resolvedAccountName: string | null = null;
+              if (finalPaymentAccountId) {
+                const matchedAcc = await tx.query.paymentAccounts.findFirst({
+                  where: and(
+                    eq(paymentAccounts.id, finalPaymentAccountId),
+                    eq(paymentAccounts.salonId, salonId as string)
+                  )
+                });
+                if (matchedAcc) {
+                  resolvedAccountName = matchedAcc.accountName;
+                }
+              }
+
+              const entryNotes = JSON.stringify({
+                paymentMethod: onlineMethod,
+                paymentAccountId: finalPaymentAccountId || undefined,
+                paymentAccountName: resolvedAccountName || undefined,
+                userNotes: `Amount Paid at Sale (${resolvedAccountName || onlineMethod}) - Sale #${id.substring(0, 8)}`
+              });
+
+              await tx.insert(ledgerEntries).values({
+                salonId: salonId as string,
+                clientId: targetClientId,
+                type: 'DEBIT',
+                amount: onlinePaid.toString(),
+                category: 'PAYMENT',
+                notes: entryNotes,
+                personName: targetClientName,
+                saleId: id as string,
+                date: saleEntryDate,
+              });
+            }
           }
         }
       }
 
-      // Return the updated sale record
       const updatedSale = await tx.query.sales.findFirst({
         where: eq(sales.id, id as string),
         with: {
           saleItems: true,
           staff: true,
+          paymentAccount: true,
         }
       });
       return updatedSale;

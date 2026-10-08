@@ -1150,12 +1150,87 @@ class _MetricsGrid extends ConsumerWidget {
             })(),
             (() {
               final balOnline = double.tryParse((m['onlineBalance'] ?? m['onlineDrawerBalance'])?.toString() ?? '0') ?? 0.0;
+              final breakdown = (m['onlineBreakdown'] ?? m['drawerBalances']?['onlineBreakdown']) as Map<String, dynamic>? ?? {};
               return _MetricCard(
                 label: 'Online Balance',
                 value: '$currency ${formatAmount(balOnline)}',
-                change: 'In Account',
+                change: breakdown.isNotEmpty ? '${breakdown.length} Accounts' : 'In Account',
                 icon: LucideIcons.creditCard,
                 accent: balOnline < 0 ? Colors.redAccent : const Color(0xFF0284C7),
+                onTap: breakdown.isNotEmpty ? () {
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      title: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0284C7).withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(LucideIcons.landmark, size: 20, color: Color(0xFF0284C7)),
+                          ),
+                          const SizedBox(width: 12),
+                          Text('Online Accounts Breakdown', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 18)),
+                        ],
+                      ),
+                      content: SizedBox(
+                        width: 360,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF0284C7).withValues(alpha: 0.06),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text('Total Online Balance', style: GoogleFonts.outfit(fontWeight: FontWeight.w600)),
+                                  Text('$currency ${formatAmount(balOnline)}', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: const Color(0xFF0284C7), fontSize: 16)),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            ...breakdown.entries.map((e) {
+                              final amt = (e.value as num?)?.toDouble() ?? 0.0;
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 6),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withValues(alpha: 0.05),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Icon(LucideIcons.landmark, size: 14, color: Colors.black54),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(e.key, style: GoogleFonts.outfit(fontWeight: FontWeight.w600, fontSize: 13)),
+                                    ),
+                                    Text('$currency ${formatAmount(amt)}', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 14)),
+                                  ],
+                                ),
+                              );
+                            }),
+                          ],
+                        ),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          child: Text('Close', style: GoogleFonts.outfit(fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  );
+                } : null,
               );
             })(),
           ],
@@ -1175,33 +1250,38 @@ class _MetricCard extends StatelessWidget {
   final String label, value, change;
   final IconData icon;
   final Color accent;
-  const _MetricCard({required this.label, required this.value, required this.change, required this.icon, required this.accent});
+  final VoidCallback? onTap;
+  const _MetricCard({required this.label, required this.value, required this.change, required this.icon, required this.accent, this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 12, offset: const Offset(0, 4))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: accent.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
-              child: Icon(icon, color: accent, size: 18),
-            ),
-            Text(change, style: GoogleFonts.outfit(color: accent, fontSize: 11, fontWeight: FontWeight.bold)),
-          ]),
-          const Spacer(),
-          Text(label, style: GoogleFonts.outfit(color: Colors.black45, fontSize: 12)),
-          const SizedBox(height: 2),
-          Text(value, style: GoogleFonts.outfit(color: _kDark, fontSize: 18, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
-        ],
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 12, offset: const Offset(0, 4))],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: accent.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
+                child: Icon(icon, color: accent, size: 18),
+              ),
+              Text(change, style: GoogleFonts.outfit(color: accent, fontSize: 11, fontWeight: FontWeight.bold)),
+            ]),
+            const Spacer(),
+            Text(label, style: GoogleFonts.outfit(color: Colors.black45, fontSize: 12)),
+            const SizedBox(height: 2),
+            Text(value, style: GoogleFonts.outfit(color: _kDark, fontSize: 18, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+          ],
+        ),
       ),
     ).animate().scale(duration: 350.ms, curve: Curves.easeOut);
   }

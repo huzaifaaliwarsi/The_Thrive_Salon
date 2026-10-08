@@ -23,6 +23,8 @@ import '../providers/inventory_provider.dart';
 import '../providers/currency_provider.dart';
 import '../providers/appointments_provider.dart';
 import '../providers/ledger_provider.dart';
+import '../models/payment_account.dart';
+import '../providers/payment_accounts_provider.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
@@ -1321,8 +1323,517 @@ class _PaymentToggleSection extends ConsumerWidget {
               Expanded(child: _PaymentOption('CREDIT', LucideIcons.userPlus, paymentMethod == 'CREDIT', label: 'RECEIVABLE')),
             ],
           ),
+          if (paymentMethod == 'ONLINE') ...[
+            const SizedBox(height: 12),
+            const _OnlineAccountSelector(),
+          ],
         ],
       ),
+    );
+  }
+}
+
+class _OnlineAccountSelector extends ConsumerWidget {
+  const _OnlineAccountSelector();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final accountsAsync = ref.watch(paymentAccountsProvider);
+    final posState = ref.watch(posProvider);
+    final total = posState.total;
+    final currency = ref.watch(currencyProvider);
+
+    return accountsAsync.when(
+      loading: () => const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 8),
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2, color: _kPrimary),
+          ),
+        ),
+      ),
+      error: (err, _) => Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.red.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          children: [
+            const Icon(LucideIcons.alertCircle, size: 16, color: Colors.redAccent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Could not load accounts',
+                style: GoogleFonts.outfit(fontSize: 12, color: Colors.redAccent),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(LucideIcons.refreshCw, size: 14),
+              onPressed: () => ref.invalidate(paymentAccountsProvider),
+            ),
+          ],
+        ),
+      ),
+      data: (allAccounts) {
+        final accounts = allAccounts.where((a) => a.isActive).toList();
+        if (accounts.isEmpty) {
+          return Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.amber.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              children: [
+                const Icon(LucideIcons.alertTriangle, size: 18, color: Colors.amber),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'No online accounts active. Setup in Salon Settings.',
+                    style: GoogleFonts.outfit(fontSize: 12, color: Colors.amber.shade900),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        if (posState.selectedPaymentAccountId == null &&
+            (posState.onlineBreakdown == null || posState.onlineBreakdown!.isEmpty)) {
+          final defaultAcc = accounts.first;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            ref.read(posProvider.notifier).setSelectedPaymentAccountId(defaultAcc.id);
+          });
+        }
+
+        final isSplit = posState.onlineBreakdown != null && posState.onlineBreakdown!.isNotEmpty;
+
+        if (isSplit) {
+          final breakdown = posState.onlineBreakdown!;
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: _kPrimary.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _kPrimary.withValues(alpha: 0.3)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(LucideIcons.split, size: 16, color: _kPrimary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Split Payment (${breakdown.length} Accounts)',
+                        style: GoogleFonts.outfit(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: _kPrimary,
+                        ),
+                      ),
+                    ),
+                    InkWell(
+                      onTap: () => _openSplitDialog(context, ref, accounts, total, currency),
+                      borderRadius: BorderRadius.circular(6),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                        child: Text(
+                          'Edit',
+                          style: GoogleFonts.outfit(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: _kAccent,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    InkWell(
+                      onTap: () {
+                        ref.read(posProvider.notifier).setOnlineBreakdown(null);
+                        final def = accounts.first;
+                        ref.read(posProvider.notifier).setSelectedPaymentAccountId(def.id);
+                      },
+                      borderRadius: BorderRadius.circular(6),
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                        child: Icon(LucideIcons.x, size: 16, color: Colors.black45),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: breakdown.map((item) {
+                    final accId = item['accountId']?.toString() ?? '';
+                    final acc = accounts.cast<PaymentAccount?>().firstWhere(
+                          (a) => a?.id == accId,
+                          orElse: () => null,
+                        );
+                    final name = acc?.accountName ?? item['accountName'] ?? 'Account';
+                    final amt = item['amount'] ?? 0;
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.black12),
+                      ),
+                      child: Text(
+                        '$name: $currency $amt',
+                        style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.w600),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          );
+        }
+
+        final selectedId = posState.selectedPaymentAccountId;
+        final selectedAccount = accounts.cast<PaymentAccount?>().firstWhere(
+          (a) => a?.id == selectedId,
+          orElse: () => accounts.first,
+        );
+
+        return Row(
+          children: [
+            Expanded(
+              child: Container(
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.black12),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: selectedAccount?.id,
+                    icon: const Icon(LucideIcons.chevronDown, size: 16, color: Colors.black45),
+                    borderRadius: BorderRadius.circular(12),
+                    items: accounts.map((acc) {
+                      return DropdownMenuItem<String>(
+                        value: acc.id,
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: _kPrimary.withValues(alpha: 0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(LucideIcons.landmark, size: 12, color: _kPrimary),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${acc.accountName} (${acc.type}${acc.accountNumber != null && acc.accountNumber!.isNotEmpty ? " - ${acc.accountNumber}" : ""})',
+                                style: GoogleFonts.outfit(fontSize: 13, fontWeight: FontWeight.w600),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        ref.read(posProvider.notifier).setSelectedPaymentAccountId(val);
+                      }
+                    },
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            InkWell(
+              onTap: () => _openSplitDialog(context, ref, accounts, total, currency),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _kPrimary.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(LucideIcons.split, size: 16, color: _kPrimary),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Split',
+                      style: GoogleFonts.outfit(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: _kPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _openSplitDialog(BuildContext context, WidgetRef ref, List<PaymentAccount> accounts, double total, String currency) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _SplitPaymentDialog(
+        accounts: accounts,
+        total: total,
+        currency: currency,
+        initialBreakdown: ref.read(posProvider).onlineBreakdown,
+        onConfirmed: (breakdown) {
+          ref.read(posProvider.notifier).setOnlineBreakdown(breakdown);
+          ref.read(posProvider.notifier).setSelectedPaymentAccountId(null);
+        },
+      ),
+    );
+  }
+}
+
+class _SplitPaymentDialog extends StatefulWidget {
+  final List<PaymentAccount> accounts;
+  final double total;
+  final String currency;
+  final List<Map<String, dynamic>>? initialBreakdown;
+  final ValueChanged<List<Map<String, dynamic>>> onConfirmed;
+
+  const _SplitPaymentDialog({
+    required this.accounts,
+    required this.total,
+    required this.currency,
+    this.initialBreakdown,
+    required this.onConfirmed,
+  });
+
+  @override
+  State<_SplitPaymentDialog> createState() => _SplitPaymentDialogState();
+}
+
+class _SplitPaymentDialogState extends State<_SplitPaymentDialog> {
+  late final Map<String, TextEditingController> _controllers;
+
+  @override
+  void initState() {
+    super.initState();
+    _controllers = {};
+    for (final acc in widget.accounts) {
+      double initialAmount = 0.0;
+      if (widget.initialBreakdown != null) {
+        final found = widget.initialBreakdown!.firstWhere(
+          (b) => b['accountId']?.toString() == acc.id,
+          orElse: () => {},
+        );
+        if (found.isNotEmpty) {
+          initialAmount = (found['amount'] as num?)?.toDouble() ?? 0.0;
+        }
+      }
+      _controllers[acc.id] = TextEditingController(
+        text: initialAmount > 0 ? (initialAmount % 1 == 0 ? initialAmount.toInt().toString() : initialAmount.toString()) : '',
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in _controllers.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  double get _currentSum {
+    double sum = 0.0;
+    for (final c in _controllers.values) {
+      final val = double.tryParse(c.text.trim()) ?? 0.0;
+      sum += val;
+    }
+    return sum;
+  }
+
+  void _fillRemaining(String targetAccountId) {
+    double otherSum = 0.0;
+    for (final entry in _controllers.entries) {
+      if (entry.key != targetAccountId) {
+        otherSum += double.tryParse(entry.value.text.trim()) ?? 0.0;
+      }
+    }
+    final remaining = widget.total - otherSum;
+    if (remaining >= 0) {
+      _controllers[targetAccountId]?.text = remaining % 1 == 0 ? remaining.toInt().toString() : remaining.toString();
+      setState(() {});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sum = _currentSum;
+    final diff = widget.total - sum;
+    final isMatched = (diff.abs() < 0.01) && sum > 0;
+
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: _kPrimary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(LucideIcons.split, size: 20, color: _kPrimary),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            'Split Online Payment',
+            style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 18),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 440,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _kDark.withValues(alpha: 0.04),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.black12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Total Amount Due:', style: GoogleFonts.outfit(fontWeight: FontWeight.w600)),
+                    Text(
+                      '${widget.currency} ${widget.total.toStringAsFixed(0)}',
+                      style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 16, color: _kPrimary),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              ...widget.accounts.map((acc) {
+                final controller = _controllers[acc.id]!;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              acc.accountName,
+                              style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                            Text(
+                              '${acc.type} • ${acc.accountTitle ?? ''} ${acc.accountNumber ?? ''}'.trim(),
+                              style: GoogleFonts.outfit(fontSize: 11, color: Colors.black45),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        width: 130,
+                        child: TextField(
+                          controller: controller,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: InputDecoration(
+                            hintText: '0',
+                            prefixText: '${widget.currency} ',
+                            prefixStyle: GoogleFonts.outfit(fontSize: 12, color: Colors.black54),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                            isDense: true,
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      IconButton(
+                        tooltip: 'Fill Remaining',
+                        icon: const Icon(LucideIcons.arrowDownToLine, size: 16, color: _kAccent),
+                        onPressed: () => _fillRemaining(acc.id),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+              const Divider(),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Allocated: ${widget.currency} ${sum.toStringAsFixed(0)}',
+                      style: GoogleFonts.outfit(fontSize: 12, fontWeight: FontWeight.bold, color: isMatched ? Colors.green : Colors.red)),
+                  Text(
+                    diff == 0
+                        ? 'Balanced'
+                        : (diff > 0
+                            ? 'Remaining: ${widget.currency} ${diff.toStringAsFixed(0)}'
+                            : 'Exceeded by: ${widget.currency} ${(-diff).toStringAsFixed(0)}'),
+                    style: GoogleFonts.outfit(fontSize: 12, fontWeight: FontWeight.bold, color: isMatched ? Colors.green : Colors.red),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text('Cancel', style: GoogleFonts.outfit(color: Colors.black54)),
+        ),
+        ElevatedButton(
+          onPressed: isMatched
+              ? () {
+                  final list = <Map<String, dynamic>>[];
+                  for (final acc in widget.accounts) {
+                    final val = double.tryParse(_controllers[acc.id]?.text.trim() ?? '') ?? 0.0;
+                    if (val > 0) {
+                      list.add({
+                        'accountId': acc.id,
+                        'accountName': acc.accountName,
+                        'amount': val,
+                      });
+                    }
+                  }
+                  widget.onConfirmed(list);
+                  Navigator.of(context).pop();
+                }
+              : null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _kPrimary,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          child: Text('Confirm Split', style: GoogleFonts.outfit(fontWeight: FontWeight.bold)),
+        ),
+      ],
     );
   }
 }
@@ -1800,6 +2311,8 @@ class _CheckoutFooter extends ConsumerWidget {
         'taxRate': state.taxRate,
         'total': state.total,
         'paymentMethod': state.paymentMethod,
+        'paymentAccountId': state.paymentMethod == 'ONLINE' ? state.selectedPaymentAccountId : null,
+        'paymentBreakdown': state.paymentMethod == 'ONLINE' ? state.onlineBreakdown : null,
         'amountPaid': state.amountPaid,
         'staffId': null,
         'createdAt': DateTime.now().toUtc().toIso8601String(),
@@ -1827,13 +2340,13 @@ class _CheckoutFooter extends ConsumerWidget {
         ref.invalidate(appointmentsProvider);
       }
       
-      // Invalidate relevant providers to refresh data
       ref.invalidate(reportsProvider);
       ref.invalidate(dashboardViewModelProvider);
       ref.invalidate(servicesProvider);
       ref.invalidate(inventoryProvider);
       ref.invalidate(clientsProvider);
       ref.invalidate(ledgerProvider);
+      ref.invalidate(paymentAccountsProvider);
       
       if (context.mounted) {
         _showSuccessDialog(context, state, ref);
@@ -1873,6 +2386,8 @@ class _CheckoutFooter extends ConsumerWidget {
         'taxRate': state.taxRate,
         'total': state.total,
         'paymentMethod': state.paymentMethod,
+        'paymentAccountId': state.paymentMethod == 'ONLINE' ? state.selectedPaymentAccountId : null,
+        'paymentBreakdown': state.paymentMethod == 'ONLINE' ? state.onlineBreakdown : null,
         'amountPaid': state.amountPaid,
         'staffId': null,
         'createdAt': DateTime.now().toUtc().toIso8601String(),
@@ -1962,12 +2477,14 @@ class _CheckoutFooter extends ConsumerWidget {
                   ],
                   const Divider(height: 12),
                   _dialogDetailRow('Payment Mode', state.paymentMethod.replaceAll('_', ' ')),
+                  if (state.paymentMethod == 'ONLINE' && state.onlineBreakdown != null) ...[
+                    const Divider(height: 12),
+                    _dialogDetailRow('Account Breakdown', 'Split (${state.onlineBreakdown!.length} accounts)'),
+                  ],
                 ],
               ),
             ),
             const SizedBox(height: 24),
-            // AlertDialog measures intrinsic size; bound the viewport so that
-            // the receipt actions can be laid out before the dialog is painted.
             SizedBox(
               width: 320,
               height: 160,

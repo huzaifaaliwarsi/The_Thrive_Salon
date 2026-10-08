@@ -73,3 +73,8 @@ Data.sql
 Structure & Data.sql
 !backend/scripts/seed-data.sql
 !backend/scripts/structure-compatible.sql
+
+# Agent & Tooling Customizations
+.agents/
+.archify/
+skills-lock.json

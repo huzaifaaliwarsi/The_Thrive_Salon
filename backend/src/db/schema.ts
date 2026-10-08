@@ -144,6 +144,8 @@ export const purchases = pgTable('purchases', {
   total: numeric('total', { precision: 10, scale: 2 }).notNull(),
   amountPaid: numeric('amount_paid', { precision: 10, scale: 2 }).default(sql`'0'::numeric`),
   paymentMethod: text('payment_method').notNull(),
+  paymentAccountId: uuid('payment_account_id').references(() => paymentAccounts.id, { onDelete: 'set null' }),
+  paymentBreakdown: text('payment_breakdown'),
   date: timestamp('date').default(sql`now()`),
   notes: text('notes'),
   createdAt: timestamp('created_at').default(sql`now()`),
@@ -191,7 +193,7 @@ export const sales = pgTable('sales', {
   status: text('status').default(sql`'ACTIVE'::text`),
   voidReason: text('void_reason'),
   paymentMethod: text('payment_method').notNull(),
-  paymentAccountId: uuid('payment_account_id').references(() => paymentAccounts.id),
+  paymentAccountId: uuid('payment_account_id').references(() => paymentAccounts.id, { onDelete: 'set null' }),
   paymentBreakdown: text('payment_breakdown'),
   amountPaid: numeric('amount_paid', { precision: 10, scale: 2 }),
   createdAt: timestamp('created_at').default(sql`now()`),
@@ -229,6 +231,7 @@ export const paymentAccounts = pgTable('payment_accounts', {
   accountName: text('account_name').notNull(),
   accountTitle: text('account_title'),
   accountNumber: text('account_number'),
+  iban: text('iban'),
   type: text('type').default(sql`'BANK'::text`),
   isActive: boolean('is_active').default(sql`true`),
   createdAt: timestamp('created_at').default(sql`now()`),
@@ -364,7 +367,8 @@ export const ledgerEntriesRelations = relations(ledgerEntries, ({ one, many }) =
 export const purchasesRelations = relations(purchases, ({ one, many }) => ({
   ledgerEntries: many(ledgerEntries, { relationName: 'ledger_entries_purchase_id' }),
   salon: one(salons, { fields: [purchases.salonId], references: [salons.id], relationName: 'purchases_salon_id' }),
-  vendor: one(vendors, { fields: [purchases.vendorId], references: [vendors.id], relationName: 'purchases_vendor_id' })
+  vendor: one(vendors, { fields: [purchases.vendorId], references: [vendors.id], relationName: 'purchases_vendor_id' }),
+  paymentAccount: one(paymentAccounts, { fields: [purchases.paymentAccountId], references: [paymentAccounts.id], relationName: 'purchases_payment_account_id' }),
 }));
 
 export const salaryDeductionsRelations = relations(salaryDeductions, ({ one, many }) => ({
@@ -384,6 +388,7 @@ export const saleItemsRelations = relations(saleItems, ({ one, many }) => ({
 export const paymentAccountsRelations = relations(paymentAccounts, ({ one, many }) => ({
   salon: one(salons, { fields: [paymentAccounts.salonId], references: [salons.id], relationName: 'payment_accounts_salon_id' }),
   sales: many(sales, { relationName: 'sales_payment_account_id' }),
+  purchases: many(purchases, { relationName: 'purchases_payment_account_id' }),
 }));
 
 

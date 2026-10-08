@@ -81,10 +81,11 @@ router.get('/metrics', authenticate, checkSubscription, async (req: AuthRequest,
     gallaStart.setDate(gallaStart.getDate() - 365);
     gallaStart.setHours(0, 0, 0, 0);
 
-    const { cashBalance, onlineBalance } = await getSalonGallaBalances(salonId as string, gallaStart, gallaEnd);
+    const gallaBalances = await getSalonGallaBalances(salonId as string, gallaStart, gallaEnd);
 
-    const effectiveCashBalance = cashBalance;
-    const effectiveOnlineBalance = onlineBalance;
+    const effectiveCashBalance = gallaBalances.cashBalance;
+    const effectiveOnlineBalance = gallaBalances.onlineBalance;
+    const onlineBreakdown = gallaBalances.onlineBreakdown || {};
     const cashSalesFinal = dashCashSales;
     const onlineSalesFinal = dashOnlineSales;
     const finalTotal = cashSalesFinal + onlineSalesFinal;
@@ -216,6 +217,7 @@ router.get('/metrics', authenticate, checkSubscription, async (req: AuthRequest,
         totalSales: finalTotal,
         cashSales: Math.max(0, cashSalesFinal),
         onlineSales: Math.max(0, onlineSalesFinal),
+        onlineBreakdown,
         staffCount: Number(staffCountResult[0]?.count || 0),
         serviceCount: Number(serviceCountResult[0]?.count || 0),
         recentGrowth: Number(recentGrowth.toFixed(1)),
@@ -223,6 +225,7 @@ router.get('/metrics', authenticate, checkSubscription, async (req: AuthRequest,
       drawerBalance: effectiveCashBalance,
       onlineBalance: effectiveOnlineBalance,
       onlineDrawerBalance: effectiveOnlineBalance,
+      drawerBalances: gallaBalances,
         inventoryAlerts: {
         lowStockCount: lowStockItems.length,
         nearExpiryCount: nearExpiryItems.length,

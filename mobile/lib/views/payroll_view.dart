@@ -14,6 +14,8 @@ import '../providers/reports_provider.dart';
 import '../providers/ledger_provider.dart';
 import '../providers/expenses_provider.dart';
 import '../providers/currency_provider.dart';
+import '../providers/payment_accounts_provider.dart';
+import '../models/payment_account.dart';
 import '../view_models/dashboard_view_model.dart';
 import '../providers/dashboard_provider.dart';
 import 'package:pdf/pdf.dart';
@@ -52,6 +54,8 @@ class GeneratedSalaryRecord {
   String status; // 'Paid' or 'Pending'
   String? expenseId;
   String? deductionId;
+  String? paymentMethod;
+  String? paymentAccountId;
 
   GeneratedSalaryRecord({
     required this.id,
@@ -76,6 +80,8 @@ class GeneratedSalaryRecord {
     required this.status,
     this.expenseId,
     this.deductionId,
+    this.paymentMethod,
+    this.paymentAccountId,
   });
 
   factory GeneratedSalaryRecord.fromJson(Map<String, dynamic> json) {
@@ -105,6 +111,8 @@ class GeneratedSalaryRecord {
       status: json['status'] ?? 'Pending',
       expenseId: json['expenseId']?.toString(),
       deductionId: json['deductionId']?.toString(),
+      paymentMethod: json['paymentMethod']?.toString(),
+      paymentAccountId: json['paymentAccountId']?.toString(),
     );
   }
 
@@ -131,6 +139,8 @@ class GeneratedSalaryRecord {
         'status': status,
         'expenseId': expenseId,
         'deductionId': deductionId,
+        'paymentMethod': paymentMethod,
+        'paymentAccountId': paymentAccountId,
       };
 }
 
@@ -761,6 +771,9 @@ class _PayrollViewState extends ConsumerState<PayrollView> {
 
     DateTime payoutDate = DateTime.now();
     String paymentMethod = 'CASH';
+    String? selectedPaymentAccountId;
+    final cashPartController = TextEditingController();
+    final onlinePartController = TextEditingController();
 
     // showModalBottomSheet is more reliable on Flutter web than showDialog
     // (avoids barrier-dismissal race condition and Navigator context issues)
@@ -822,6 +835,11 @@ class _PayrollViewState extends ConsumerState<PayrollView> {
                           final net = (grossVal + bonusVal - dedVal - loanVal)
                               .clamp(0.0, double.infinity);
                           paidC.text = net.toStringAsFixed(2);
+                          if (paymentMethod == 'SPLIT') {
+                            final half = (net / 2).roundToDouble();
+                            cashPartController.text = half.toStringAsFixed(2);
+                            onlinePartController.text = (net - half).toStringAsFixed(2);
+                          }
                         }
 
                         return Column(
@@ -869,11 +887,146 @@ class _PayrollViewState extends ConsumerState<PayrollView> {
                         labelStyle: GoogleFonts.outfit(fontSize: 14, color: Colors.black38),
                       ),
                       items: const [
-                        DropdownMenuItem(value: 'CASH', child: Text('Cash')),
-                        DropdownMenuItem(value: 'ONLINE', child: Text('Online / Card')),
+                        DropdownMenuItem(value: 'CASH', child: Text('Cash Drawer')),
+                        DropdownMenuItem(value: 'ONLINE', child: Text('Online / Bank / Wallet')),
+                        DropdownMenuItem(value: 'SPLIT', child: Text('Split (Cash + Online)')),
                       ],
-                      onChanged: (v) => setS(() => paymentMethod = v!),
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setS(() {
+                          paymentMethod = v;
+                          if (paymentMethod == 'SPLIT') {
+                            final total = double.tryParse(paidC.text) ?? record.amountPaid;
+                            final half = (total / 2).roundToDouble();
+                            cashPartController.text = half.toStringAsFixed(2);
+                            onlinePartController.text = (total - half).toStringAsFixed(2);
+                          }
+                        });
+                      },
                     ),
+                    if (paymentMethod == 'ONLINE' || paymentMethod == 'SPLIT') ...[
+                      const SizedBox(height: 12),
+                      Consumer(
+                        builder: (context, ref, _) {
+                          final accountsAsync = ref.watch(paymentAccountsProvider);
+                          final accounts = accountsAsync.maybeWhen(
+                            data: (list) => list.where((a) => a.isActive).toList(),
+                            orElse: () => <PaymentAccount>[],
+                          );
+
+                          if (selectedPaymentAccountId == null && accounts.isNotEmpty) {
+                            selectedPaymentAccountId = accounts.first.id;
+                          }
+
+                          if (accounts.isEmpty) {
+                            return Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.shade50,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.amber.shade300),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(LucideIcons.alertCircle, size: 16, color: Colors.amber.shade900),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'No active bank/wallet accounts configured. Add one in Settings.',
+                                      style: GoogleFonts.outfit(fontSize: 12, color: Colors.amber.shade900),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+
+                          return DropdownButtonFormField<String>(
+                            value: selectedPaymentAccountId,
+                            style: GoogleFonts.outfit(fontSize: 14, color: Colors.black),
+                            decoration: InputDecoration(
+                              labelText: paymentMethod == 'SPLIT' ? 'Online Bank Account (Split Portion) *' : 'Select Bank / Wallet Account *',
+                              prefixIcon: Icon(LucideIcons.landmark, size: 18, color: _kPrimary.withValues(alpha: 0.5)),
+                              filled: true,
+                              fillColor: _kBg,
+                              contentPadding: const EdgeInsets.fromLTRB(12, 24, 12, 10),
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide.none),
+                              labelStyle: GoogleFonts.outfit(fontSize: 14, color: Colors.black38),
+                            ),
+                            items: accounts.map((a) {
+                              final icon = a.type == 'WALLET' ? LucideIcons.smartphone : LucideIcons.landmark;
+                              return DropdownMenuItem<String>(
+                                value: a.id,
+                                child: Row(
+                                  children: [
+                                    Icon(icon, size: 14, color: _kPrimary),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      a.accountNumber != null && a.accountNumber!.isNotEmpty
+                                          ? '${a.accountName} (${a.accountNumber})'
+                                          : a.accountName,
+                                      style: GoogleFonts.outfit(fontSize: 13),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                            onChanged: (v) => setS(() => selectedPaymentAccountId = v),
+                          );
+                        },
+                      ),
+                    ],
+                    if (paymentMethod == 'SPLIT') ...[
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: cashPartController,
+                              keyboardType: TextInputType.number,
+                              style: GoogleFonts.outfit(fontSize: 13),
+                              onChanged: (val) {
+                                final total = double.tryParse(paidC.text) ?? 0;
+                                final cash = double.tryParse(val) ?? 0;
+                                onlinePartController.text = (total - cash).toStringAsFixed(2);
+                              },
+                              decoration: InputDecoration(
+                                labelText: 'Cash Part',
+                                prefixText: 'PKR ',
+                                filled: true,
+                                fillColor: _kBg,
+                                contentPadding: const EdgeInsets.fromLTRB(10, 16, 10, 8),
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide.none),
+                                labelStyle: GoogleFonts.outfit(fontSize: 12, color: Colors.black38),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: onlinePartController,
+                              keyboardType: TextInputType.number,
+                              style: GoogleFonts.outfit(fontSize: 13),
+                              decoration: InputDecoration(
+                                labelText: 'Online Part',
+                                prefixText: 'PKR ',
+                                filled: true,
+                                fillColor: _kBg,
+                                contentPadding: const EdgeInsets.fromLTRB(10, 16, 10, 8),
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide.none),
+                                labelStyle: GoogleFonts.outfit(fontSize: 12, color: Colors.black38),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     InkWell(
                       onTap: () async {
@@ -966,6 +1119,30 @@ class _PayrollViewState extends ConsumerState<PayrollView> {
                               final loanVal =
                                   double.tryParse(loanC.text) ?? 0.0;
 
+                              double cashAmt = paidAmount;
+                              double onlineAmt = 0.0;
+                              if (paymentMethod == 'ONLINE') {
+                                cashAmt = 0.0;
+                                onlineAmt = paidAmount;
+                              } else if (paymentMethod == 'SPLIT') {
+                                cashAmt = double.tryParse(cashPartController.text) ?? 0.0;
+                                onlineAmt = double.tryParse(onlinePartController.text) ?? 0.0;
+                                if (cashAmt + onlineAmt <= 0) {
+                                  cashAmt = paidAmount / 2;
+                                  onlineAmt = paidAmount - cashAmt;
+                                }
+                              }
+
+                              if ((paymentMethod == 'ONLINE' || (paymentMethod == 'SPLIT' && onlineAmt > 0)) && (selectedPaymentAccountId == null || selectedPaymentAccountId!.isEmpty)) {
+                                if (sheetCtx.mounted) {
+                                  ScaffoldMessenger.of(sheetCtx).showSnackBar(const SnackBar(
+                                    content: Text('Please select a bank or wallet account for the online payout.', style: TextStyle(color: Colors.white)),
+                                    backgroundColor: Colors.redAccent,
+                                  ));
+                                }
+                                return;
+                              }
+
                               // Close bottom sheet first
                               Navigator.pop(sheetCtx);
 
@@ -991,6 +1168,9 @@ class _PayrollViewState extends ConsumerState<PayrollView> {
                                       .format(payoutDate),
                                   'salonId': salonId,
                                   'paymentMethod': paymentMethod,
+                                  'paymentAccountId': (paymentMethod == 'ONLINE' || (paymentMethod == 'SPLIT' && onlineAmt > 0)) ? selectedPaymentAccountId : null,
+                                  if (paymentMethod == 'SPLIT') 'cashAmount': cashAmt,
+                                  if (paymentMethod == 'SPLIT') 'onlineAmount': onlineAmt,
                                 });
                                 final String? newExpenseId =
                                     expenseResult['id']?.toString();
@@ -1007,7 +1187,8 @@ class _PayrollViewState extends ConsumerState<PayrollView> {
                                             'Loan Repayment (Payroll: ${record.month} ${record.year})',
                                         date: DateFormat('yyyy-MM-dd')
                                             .format(payoutDate),
-                                        paymentMethod: paymentMethod,
+                                        paymentMethod: paymentMethod == 'SPLIT' ? 'CASH' : paymentMethod,
+                                        paymentAccountId: paymentMethod == 'ONLINE' ? selectedPaymentAccountId : null,
                                       );
                                   newDeductionId = dedResult['id']?.toString();
                                 }
@@ -1033,6 +1214,8 @@ class _PayrollViewState extends ConsumerState<PayrollView> {
                                   record.amountPaid = paidAmount;
                                   record.expenseId = newExpenseId;
                                   record.deductionId = newDeductionId;
+                                  record.paymentMethod = paymentMethod;
+                                  record.paymentAccountId = selectedPaymentAccountId;
                                 });
                                 await _saveGeneratedSalaries();
 

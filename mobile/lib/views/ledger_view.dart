@@ -14,6 +14,8 @@ import '../providers/currency_provider.dart';
 import '../providers/reports_provider.dart';
 import '../providers/dashboard_provider.dart';
 import '../providers/salons_provider.dart';
+import '../providers/payment_accounts_provider.dart';
+import '../models/payment_account.dart';
 import '../view_models/dashboard_view_model.dart';
 import '../utils/format_helper.dart';
 import 'package:share_plus/share_plus.dart';
@@ -1215,8 +1217,10 @@ class _LedgerViewState extends ConsumerState<LedgerView> {
                             const SizedBox(width: 8),
                             Text(
                               (method == 'ONLINE' || method == 'CARD' || method == 'BANK_TRANSFER' || method == 'UPI' || method == 'DIGITAL' || method == 'CHECK' || method == 'CHEQUE' || method == 'CHQ')
-                                  ? 'Online'
-                                  : 'Offline',
+                                  ? ((struct != null && struct['paymentAccountName'] != null && struct['paymentAccountName'].toString().isNotEmpty)
+                                      ? 'Online (${struct['paymentAccountName']})'
+                                      : 'Online')
+                                  : 'Offline / Cash',
                               style: GoogleFonts.outfit(
                                   color: Colors.black38,
                                   fontSize: 11,
@@ -1457,6 +1461,9 @@ class _LedgerViewState extends ConsumerState<LedgerView> {
                           entry['vendor'] == null &&
                           entry['staff'] == null) ...[
                         _tag(LucideIcons.wallet, 'General', Colors.blueGrey),
+                      ],
+                      if (struct != null && struct['paymentAccountName'] != null && struct['paymentAccountName'].toString().isNotEmpty) ...[
+                        _tag(LucideIcons.landmark, struct['paymentAccountName'].toString(), Colors.purple),
                       ],
                       Text(
                         entry['type'] == 'CREDIT'
@@ -2375,6 +2382,10 @@ class _LedgerViewState extends ConsumerState<LedgerView> {
     String status = struct != null ? (struct['status'] ?? 'PAID') : 'PAID';
     String paymentMethod =
         struct != null ? (struct['paymentMethod'] ?? 'CASH') : 'CASH';
+    String? selectedPaymentAccountId =
+        struct != null ? struct['paymentAccountId']?.toString() : null;
+    String? selectedPaymentAccountName =
+        struct != null ? struct['paymentAccountName']?.toString() : null;
     String type =
         isEdit ? entry['type'] : (_filterClientId != null ? 'DEBIT' : 'DEBIT');
     DateTime selectedDate =
@@ -2725,6 +2736,87 @@ class _LedgerViewState extends ConsumerState<LedgerView> {
                       onChanged: (v) =>
                           setDialogState(() => paymentMethod = v!),
                     ),
+                    if (paymentMethod == 'ONLINE' || paymentMethod == 'CARD' || paymentMethod == 'BANK_TRANSFER' || paymentMethod == 'UPI' || paymentMethod == 'DIGITAL' || paymentMethod == 'CHECK' || paymentMethod == 'CHEQUE' || paymentMethod == 'CHQ') ...[
+                      const SizedBox(height: 12),
+                      Consumer(
+                        builder: (context, ref, _) {
+                          final accountsAsync = ref.watch(paymentAccountsProvider);
+                          final accounts = accountsAsync.maybeWhen(
+                            data: (list) => list.where((a) => a.isActive).toList(),
+                            orElse: () => <PaymentAccount>[],
+                          );
+
+                          if (selectedPaymentAccountId == null && accounts.isNotEmpty) {
+                            selectedPaymentAccountId = accounts.first.id;
+                            selectedPaymentAccountName = accounts.first.accountName;
+                          }
+
+                          if (accounts.isEmpty) {
+                            return Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.shade50,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.amber.shade300),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(LucideIcons.alertCircle, size: 16, color: Colors.amber.shade900),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'No active bank/wallet accounts configured. Add one in Settings.',
+                                      style: GoogleFonts.outfit(fontSize: 12, color: Colors.amber.shade900),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+
+                          return DropdownButtonFormField<String>(
+                            value: selectedPaymentAccountId,
+                            style: GoogleFonts.outfit(fontSize: 14, color: Colors.black),
+                            decoration: InputDecoration(
+                              labelText: 'Select Bank / Wallet Account *',
+                              prefixIcon: Icon(LucideIcons.landmark, size: 18, color: _kPrimary.withValues(alpha: 0.5)),
+                              filled: true,
+                              fillColor: _kBg,
+                              contentPadding: const EdgeInsets.fromLTRB(12, 24, 12, 10),
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide.none),
+                              labelStyle: GoogleFonts.outfit(fontSize: 14, color: Colors.black38),
+                            ),
+                            items: accounts.map((a) {
+                              final icon = a.type == 'WALLET' ? LucideIcons.smartphone : LucideIcons.landmark;
+                              return DropdownMenuItem<String>(
+                                value: a.id,
+                                child: Row(
+                                  children: [
+                                    Icon(icon, size: 14, color: _kPrimary),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      a.accountNumber != null && a.accountNumber!.isNotEmpty
+                                          ? '${a.accountName} (${a.accountNumber})'
+                                          : a.accountName,
+                                      style: GoogleFonts.outfit(fontSize: 13),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                            onChanged: (v) {
+                              setDialogState(() {
+                                selectedPaymentAccountId = v;
+                                final matched = accounts.firstWhere((a) => a.id == v, orElse: () => accounts.first);
+                                selectedPaymentAccountName = matched.accountName;
+                              });
+                            },
+                          );
+                        },
+                      ),
+                    ],
                     const SizedBox(height: 12),
 
                     // 8. General credit/debit switcher (only visible for General tab)
@@ -2948,6 +3040,16 @@ class _LedgerViewState extends ConsumerState<LedgerView> {
                               }
                             }
 
+                            final isOnlinePayment = (paymentMethod == 'ONLINE' || paymentMethod == 'CARD' || paymentMethod == 'BANK_TRANSFER' || paymentMethod == 'UPI' || paymentMethod == 'DIGITAL' || paymentMethod == 'CHECK' || paymentMethod == 'CHEQUE' || paymentMethod == 'CHQ');
+                            if (isOnlinePayment && (selectedPaymentAccountId == null || selectedPaymentAccountId!.isEmpty)) {
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                content: Text('Please select a bank or wallet account for the online transaction'),
+                                backgroundColor: Colors.redAccent,
+                                behavior: SnackBarBehavior.floating,
+                              ));
+                              return;
+                            }
+
                             setDialogState(() => _isSaving = true);
                             try {
                               final Map<String, dynamic> structuredNotes = {
@@ -2961,6 +3063,8 @@ class _LedgerViewState extends ConsumerState<LedgerView> {
                                 'remainingAmount': remainingVal,
                                 'status': status,
                                 'paymentMethod': paymentMethod,
+                                'paymentAccountId': isOnlinePayment ? selectedPaymentAccountId : null,
+                                'paymentAccountName': isOnlinePayment ? selectedPaymentAccountName : null,
                                 'transactionType': transactionType,
                                 'purchaseId': selectedPurchaseId,
                                 'saleId': selectedSaleId,
@@ -2976,6 +3080,7 @@ class _LedgerViewState extends ConsumerState<LedgerView> {
                                 'amount': dbAmount.toString(),
                                 'type': dbType,
                                 'paymentMethod': paymentMethod,
+                                'paymentAccountId': isOnlinePayment ? selectedPaymentAccountId : null,
                                 'notes': jsonEncode(structuredNotes),
                                 'date': selectedDate.toUtc().toIso8601String(),
                               };
@@ -2991,6 +3096,7 @@ class _LedgerViewState extends ConsumerState<LedgerView> {
                                     'total': totalVal,
                                     'amountPaid': paidVal,
                                     'paymentMethod': paymentMethod,
+                                    'paymentAccountId': isOnlinePayment ? selectedPaymentAccountId : null,
                                     'notes': notesC.text.isNotEmpty ? notesC.text : 'Manual Bill Entry',
                                     'date': selectedDate.toUtc().toIso8601String(),
                                   };

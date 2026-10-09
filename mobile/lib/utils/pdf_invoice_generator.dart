@@ -21,6 +21,34 @@ class InvoiceItemData {
       this.savedDiscount});
 }
 
+class InvoicePaymentAccountInfo {
+  final String accountName;
+  final String? accountTitle;
+  final String? accountNumber;
+  final String? iban;
+  final double? amount;
+
+  InvoicePaymentAccountInfo({
+    required this.accountName,
+    this.accountTitle,
+    this.accountNumber,
+    this.iban,
+    this.amount,
+  });
+
+  factory InvoicePaymentAccountInfo.fromJson(Map<String, dynamic> json) {
+    return InvoicePaymentAccountInfo(
+      accountName: json['accountName']?.toString() ??
+          json['name']?.toString() ??
+          'Online Account',
+      accountTitle: json['accountTitle']?.toString() ?? json['title']?.toString(),
+      accountNumber: json['accountNumber']?.toString() ?? json['number']?.toString(),
+      iban: json['iban']?.toString(),
+      amount: double.tryParse(json['amount']?.toString() ?? ''),
+    );
+  }
+}
+
 class InvoiceData {
   final String invoiceId;
   final String? savedInvoiceNumber;
@@ -36,6 +64,7 @@ class InvoiceData {
   final String paymentMethod;
   final DateTime date;
   final String? customerName, cashierName;
+  final List<InvoicePaymentAccountInfo>? paymentAccountsInfo;
   InvoiceData(
       {required this.invoiceId,
       this.savedInvoiceNumber,
@@ -51,7 +80,8 @@ class InvoiceData {
       required this.paymentMethod,
       required this.date,
       this.customerName,
-      this.cashierName});
+      this.cashierName,
+      this.paymentAccountsInfo});
 }
 
 class PdfInvoiceGenerator {
@@ -195,6 +225,29 @@ class PdfInvoiceGenerator {
                     if (state.paymentMethod.isNotEmpty)
                       pw.Text('Mode of Payment: ${state.paymentMethod}',
                           style: style),
+                    if (state.paymentAccountsInfo != null &&
+                        state.paymentAccountsInfo!.isNotEmpty) ...[
+                      ...state.paymentAccountsInfo!.map((acc) {
+                        final amtStr = (acc.amount != null &&
+                                acc.amount! > 0 &&
+                                state.paymentAccountsInfo!.length > 1)
+                            ? ' (${acc.amount!.toStringAsFixed(2)})'
+                            : '';
+                        return pw.Column(
+                          crossAxisAlignment: pw.CrossAxisAlignment.start,
+                          children: [
+                            pw.Text('Bank/Account: ${acc.accountName}$amtStr',
+                                style: style),
+                            if (_text(acc.accountTitle).isNotEmpty)
+                              pw.Text('Account Title: ${_text(acc.accountTitle)}',
+                                  style: style),
+                            if (_text(acc.accountNumber).isNotEmpty)
+                              pw.Text('Account No: ${_text(acc.accountNumber)}',
+                                  style: style),
+                          ],
+                        );
+                      }),
+                    ],
                     if (_text(state.customerName).isNotEmpty)
                       pw.Text('Customer: ${state.customerName}', style: style),
                     pw.SizedBox(height: 8),

@@ -66,9 +66,51 @@ class DrawerTabWidget extends ConsumerWidget {
     return ['ONLINE', 'CARD', 'BANK_TRANSFER', 'UPI', 'DIGITAL', 'CHECK', 'CHEQUE', 'CHQ'].contains(pMethod);
   }
 
+  static String _getEntryAccountName(dynamic entry, Map<String, String> accountMap) {
+    if (entry == null) return accountMap.length == 1 ? accountMap.values.first : 'Other Online';
+
+    final directName = entry['paymentAccountName']?.toString().trim();
+    if (directName != null && directName.isNotEmpty) return directName;
+
+    final directId = entry['paymentAccountId']?.toString().trim();
+    if (directId != null && accountMap.containsKey(directId)) {
+      return accountMap[directId]!;
+    }
+
+    final notes = (entry['notes']?.toString() ?? '').trim();
+    if (notes.startsWith('{') && notes.endsWith('}')) {
+      try {
+        final struct = jsonDecode(notes);
+        final structName = struct['paymentAccountName']?.toString().trim();
+        if (structName != null && structName.isNotEmpty) return structName;
+
+        final structId = struct['paymentAccountId']?.toString().trim();
+        if (structId != null && accountMap.containsKey(structId)) {
+          return accountMap[structId]!;
+        }
+      } catch (_) {}
+    }
+
+    final upperNotes = notes.toUpperCase();
+    for (final name in accountMap.values) {
+      if (upperNotes.contains(name.toUpperCase())) {
+        return name;
+      }
+    }
+
+    if (accountMap.length == 1) {
+      return accountMap.values.first;
+    }
+
+    return 'Other Online';
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final currency = ref.watch(currencyProvider);
+    final activeAccounts = ref.watch(activePaymentAccountsProvider);
+    final Map<String, dynamic> onlineBreakdownMap =
+        (backendDrawerBalances?['onlineBreakdown'] as Map<String, dynamic>?) ?? {};
     final ledgerAsync = ref.watch(ledgerProvider(LedgerParams(salonId: salonId, limit: 1000, includeOnline: true)));
 
     return ledgerAsync.when(
@@ -82,6 +124,11 @@ class DrawerTabWidget extends ConsumerWidget {
           return (localEntryDate.isAfter(startDate) || localEntryDate.isAtSameMomentAs(startDate)) &&
                  (localEntryDate.isBefore(endDate) || localEntryDate.isAtSameMomentAs(endDate));
         }).toList();
+
+        final Map<String, String> accountMap = {};
+        for (final acc in activeAccounts) {
+          accountMap[acc.id] = acc.accountName;
+        }
 
         double serviceCash = 0;
         double serviceOnline = 0;
@@ -99,6 +146,11 @@ class DrawerTabWidget extends ConsumerWidget {
         double vatOnline = 0;
         double vatReceivable = 0;
 
+        final Map<String, double> serviceBankMap = {};
+        final Map<String, double> productBankMap = {};
+        final Map<String, double> discountBankMap = {};
+        final Map<String, double> vatBankMap = {};
+
         final startM = DateTime(startDate.year, startDate.month, startDate.day, 0, 0, 0);
         final endM = DateTime(endDate.year, endDate.month, endDate.day, 23, 59, 59, 999);
 
@@ -107,6 +159,7 @@ class DrawerTabWidget extends ConsumerWidget {
           final List<dynamic> salePayments = sale['payments'] as List<dynamic>? ?? [];
           double cashSum = 0;
           double onlineSum = 0;
+          final Map<String, double> bankSums = {};
           
           if (salePayments.isNotEmpty) {
             for (var p in salePayments) {
@@ -121,6 +174,8 @@ class DrawerTabWidget extends ConsumerWidget {
 
               if (isOnline) {
                 onlineSum += amt;
+                final bName = _getEntryAccountName(p, accountMap);
+                bankSums[bName] = (bankSums[bName] ?? 0.0) + amt;
               } else {
                 cashSum += amt;
               }
@@ -132,14 +187,43 @@ class DrawerTabWidget extends ConsumerWidget {
               final isOnline = _isEntryOnline(se);
               if (isOnline) {
                 onlineSum += amt;
+                final bName = _getEntryAccountName(se, accountMap);
+                bankSums[bName] = (bankSums[bName] ?? 0.0) + amt;
               } else {
                 cashSum += amt;
+              }
+            }
+          }
+
+          if (cashSum == 0 && onlineSum == 0 && sale['paymentBreakdown'] != null) {
+            final raw = sale['paymentBreakdown'];
+            dynamic list;
+            if (raw is List) {
+              list = raw;
+            } else if (raw is String && raw.trim().startsWith('[')) {
+              try {
+                list = jsonDecode(raw);
+              } catch (_) {}
+            }
+            if (list is List && list.isNotEmpty) {
+              for (var item in list) {
+                final pMethod = (item['paymentMethod']?.toString() ?? '').toUpperCase();
+                final amt = double.tryParse(item['amount']?.toString() ?? '0') ?? 0.0;
+                final isItemOnline = ['ONLINE', 'CARD', 'BANK_TRANSFER', 'UPI', 'DIGITAL', 'CHECK', 'CHEQUE', 'CHQ'].contains(pMethod);
+                if (isItemOnline) {
+                  onlineSum += amt;
+                  final bName = _getEntryAccountName(item, accountMap);
+                  bankSums[bName] = (bankSums[bName] ?? 0.0) + amt;
+                } else {
+                  cashSum += amt;
+                }
               }
             }
           }
           
           double cashRatioForSale = 1.0;
           double onlineRatioForSale = 0.0;
+          final Map<String, double> bankRatiosForSale = {};
           final totalFromEntries = cashSum + onlineSum;
           final method = sale['paymentMethod']?.toString().toUpperCase() ?? 'CASH';
           final isSaleOnlineMethod = ['ONLINE', 'CARD', 'BANK_TRANSFER', 'UPI', 'DIGITAL', 'CHECK', 'CHEQUE', 'CHQ'].contains(method);
@@ -147,9 +231,14 @@ class DrawerTabWidget extends ConsumerWidget {
           if (totalFromEntries > 0) {
             cashRatioForSale = (cashSum / totalFromEntries).clamp(0.0, 1.0);
             onlineRatioForSale = (onlineSum / totalFromEntries).clamp(0.0, 1.0);
+            for (var bEntry in bankSums.entries) {
+              bankRatiosForSale[bEntry.key] = (bEntry.value / totalFromEntries).clamp(0.0, 1.0);
+            }
           } else if (isSaleOnlineMethod) {
             cashRatioForSale = 0.0;
             onlineRatioForSale = 1.0;
+            final bName = _getEntryAccountName(sale, accountMap);
+            bankRatiosForSale[bName] = 1.0;
           } else {
             cashRatioForSale = 1.0;
             onlineRatioForSale = 0.0;
@@ -249,6 +338,15 @@ class DrawerTabWidget extends ConsumerWidget {
           discountOnline += paidDiscount * onlineRatioForSale;
           vatOnline += paidTax * onlineRatioForSale;
 
+          for (var bEntry in bankRatiosForSale.entries) {
+            final bName = bEntry.key;
+            final ratio = bEntry.value;
+            serviceBankMap[bName] = (serviceBankMap[bName] ?? 0.0) + (paidGrossServ * ratio);
+            productBankMap[bName] = (productBankMap[bName] ?? 0.0) + (paidGrossProd * ratio);
+            discountBankMap[bName] = (discountBankMap[bName] ?? 0.0) + (paidDiscount * ratio);
+            vatBankMap[bName] = (vatBankMap[bName] ?? 0.0) + (paidTax * ratio);
+          }
+
           serviceCash += paidGrossServ * cashRatioForSale;
           productCash += paidGrossProd * cashRatioForSale;
           discountCash += paidDiscount * cashRatioForSale;
@@ -262,6 +360,7 @@ class DrawerTabWidget extends ConsumerWidget {
 
         double expenseCash = 0;
         double expenseOnline = 0;
+        final Map<String, double> expenseBankMap = {};
         
         for (var entry in entries) {
           final isExpense = entry['category'] == 'EXPENSE';
@@ -272,6 +371,8 @@ class DrawerTabWidget extends ConsumerWidget {
             final isOnline = _isEntryOnline(entry);
             if (isOnline) {
               expenseOnline += amt;
+              final bName = _getEntryAccountName(entry, accountMap);
+              expenseBankMap[bName] = (expenseBankMap[bName] ?? 0.0) + amt;
             } else {
               expenseCash += amt;
             }
@@ -280,6 +381,7 @@ class DrawerTabWidget extends ConsumerWidget {
 
         double supplierCash = 0;
         double supplierOnline = 0;
+        final Map<String, double> supplierBankMap = {};
 
         for (var entry in entries) {
           final isVendorPayment = (entry['category'] == 'PAYMENT' || entry['category'] == 'PURCHASE') && entry['vendorId'] != null && entry['type'] == 'DEBIT';
@@ -289,6 +391,8 @@ class DrawerTabWidget extends ConsumerWidget {
             final isOnline = _isEntryOnline(entry);
             if (isOnline) {
               supplierOnline += amt;
+              final bName = _getEntryAccountName(entry, accountMap);
+              supplierBankMap[bName] = (supplierBankMap[bName] ?? 0.0) + amt;
             } else {
               supplierCash += amt;
             }
@@ -297,6 +401,7 @@ class DrawerTabWidget extends ConsumerWidget {
 
         double salaryCash = 0;
         double salaryOnline = 0;
+        final Map<String, double> salaryBankMap = {};
 
         for (var entry in entries) {
           final cat = entry['category']?.toString().toUpperCase();
@@ -307,6 +412,8 @@ class DrawerTabWidget extends ConsumerWidget {
             final isOnline = _isEntryOnline(entry);
             if (isOnline) {
               salaryOnline += amt;
+              final bName = _getEntryAccountName(entry, accountMap);
+              salaryBankMap[bName] = (salaryBankMap[bName] ?? 0.0) + amt;
             } else {
               salaryCash += amt;
             }
@@ -315,6 +422,7 @@ class DrawerTabWidget extends ConsumerWidget {
 
         double collectedReceivablesCash = 0;
         double collectedReceivablesOnline = 0;
+        final Map<String, double> collectedReceivablesBankMap = {};
 
         for (var entry in entries) {
           if (entry['category'] == 'PAYMENT' && entry['clientId'] != null && entry['vendorId'] == null && entry['type'] == 'DEBIT') {
@@ -337,6 +445,8 @@ class DrawerTabWidget extends ConsumerWidget {
             
             if (isOnline) {
               collectedReceivablesOnline += amt;
+              final bName = _getEntryAccountName(entry, accountMap);
+              collectedReceivablesBankMap[bName] = (collectedReceivablesBankMap[bName] ?? 0.0) + amt;
             } else {
               collectedReceivablesCash += amt;
             }
@@ -345,6 +455,7 @@ class DrawerTabWidget extends ConsumerWidget {
 
         double voidReversalCash = 0;
         double voidReversalOnline = 0;
+        final Map<String, double> voidReversalBankMap = {};
 
         for (var entry in entries) {
           if (entry['category'] == 'VOID_REVERSAL' && entry['type'] == 'CREDIT') {
@@ -354,6 +465,8 @@ class DrawerTabWidget extends ConsumerWidget {
 
             if (isOnline) {
               voidReversalOnline += amt;
+              final bName = _getEntryAccountName(entry, accountMap);
+              voidReversalBankMap[bName] = (voidReversalBankMap[bName] ?? 0.0) + amt;
             } else {
               voidReversalCash += amt;
             }
@@ -386,6 +499,49 @@ class DrawerTabWidget extends ConsumerWidget {
         final double balCash = netCash + vatCash + collectedReceivablesCash + reconSurplusCash - expenseCash - supplierCash - salaryCash - voidReversalCash - reconShortageCash;
         final double balOnline = netOnline + vatOnline + collectedReceivablesOnline - expenseOnline - supplierOnline - salaryOnline - voidReversalOnline;
         final double balRec = netRec + vatReceivable - (collectedReceivablesCash + collectedReceivablesOnline);
+
+        // Build distinct list of bank account names for table columns
+        final List<String> distinctBanks = [];
+        for (final acc in activeAccounts) {
+          if (!distinctBanks.contains(acc.accountName)) {
+            distinctBanks.add(acc.accountName);
+          }
+        }
+        for (final k in onlineBreakdownMap.keys) {
+          if (!distinctBanks.contains(k) && k != 'Other Online') {
+            distinctBanks.add(k);
+          }
+        }
+        final allUsedBanks = {
+          ...serviceBankMap.keys,
+          ...productBankMap.keys,
+          ...expenseBankMap.keys,
+          ...supplierBankMap.keys,
+          ...salaryBankMap.keys,
+          ...collectedReceivablesBankMap.keys,
+          ...voidReversalBankMap.keys,
+        };
+        for (final k in allUsedBanks) {
+          if (!distinctBanks.contains(k)) {
+            distinctBanks.add(k);
+          }
+        }
+
+        final Map<String, double> balBankMap = {};
+        for (final bank in distinctBanks) {
+          final s = serviceBankMap[bank] ?? 0.0;
+          final p = productBankMap[bank] ?? 0.0;
+          final d = discountBankMap[bank] ?? 0.0;
+          final v = vatBankMap[bank] ?? 0.0;
+          final net = (s + p) - d;
+          final exp = expenseBankMap[bank] ?? 0.0;
+          final sup = supplierBankMap[bank] ?? 0.0;
+          final sal = salaryBankMap[bank] ?? 0.0;
+          final col = collectedReceivablesBankMap[bank] ?? 0.0;
+          final voidRev = voidReversalBankMap[bank] ?? 0.0;
+
+          balBankMap[bank] = net + v + col - exp - sup - sal - voidRev;
+        }
 
         final isWide = MediaQuery.of(context).size.width > 900;
 
@@ -434,27 +590,128 @@ class DrawerTabWidget extends ConsumerWidget {
                       DataColumn(label: Text('Transaction Detail', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: _kDark, fontSize: 13))),
                       DataColumn(label: Text('Cash Amount', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: _kDark, fontSize: 13))),
                       DataColumn(label: Text('Online Amount', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: _kDark, fontSize: 13))),
+                      ...distinctBanks.map((bank) => DataColumn(
+                        label: Text(bank, style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: _kDark, fontSize: 13)),
+                      )),
                       DataColumn(label: Text('Receivable Amount', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: _kDark, fontSize: 13))),
                       DataColumn(label: Text('Total Flow', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: _kDark, fontSize: 13))),
                     ],
                     rows: [
-                      _buildDataRow('Service Sales (Gross)', serviceCash, serviceOnline, serviceReceivable, currency),
-                      _buildDataRow('Product Sales (Gross)', productCash, productOnline, productReceivable, currency),
-                      _buildDataRow('Discount Given', -discountCash, -discountOnline, -discountReceivable, currency, isNegative: true),
-                      _buildDataRow('Net Sales', netCash, netOnline, netRec, currency, isBold: true),
-                      _buildDataRow('VAT/Tax Collected', vatCash, vatOnline, vatReceivable, currency),
-                      _buildDataRow('Operating Expenses', -expenseCash, -expenseOnline, 0, currency, isNegative: true),
-                      _buildDataRow('Supplier Payments', -supplierCash, -supplierOnline, 0, currency, isNegative: true),
+                      _buildDataRow(
+                        'Service Sales (Gross)',
+                        serviceCash,
+                        serviceOnline,
+                        distinctBanks.map((b) => serviceBankMap[b] ?? 0.0).toList(),
+                        serviceReceivable,
+                        currency,
+                      ),
+                      _buildDataRow(
+                        'Product Sales (Gross)',
+                        productCash,
+                        productOnline,
+                        distinctBanks.map((b) => productBankMap[b] ?? 0.0).toList(),
+                        productReceivable,
+                        currency,
+                      ),
+                      _buildDataRow(
+                        'Discount Given',
+                        -discountCash,
+                        -discountOnline,
+                        distinctBanks.map((b) => -(discountBankMap[b] ?? 0.0)).toList(),
+                        -discountReceivable,
+                        currency,
+                        isNegative: true,
+                      ),
+                      _buildDataRow(
+                        'Net Sales',
+                        netCash,
+                        netOnline,
+                        distinctBanks.map((b) => ((serviceBankMap[b] ?? 0.0) + (productBankMap[b] ?? 0.0)) - (discountBankMap[b] ?? 0.0)).toList(),
+                        netRec,
+                        currency,
+                        isBold: true,
+                      ),
+                      _buildDataRow(
+                        'VAT/Tax Collected',
+                        vatCash,
+                        vatOnline,
+                        distinctBanks.map((b) => vatBankMap[b] ?? 0.0).toList(),
+                        vatReceivable,
+                        currency,
+                      ),
+                      _buildDataRow(
+                        'Operating Expenses',
+                        -expenseCash,
+                        -expenseOnline,
+                        distinctBanks.map((b) => -(expenseBankMap[b] ?? 0.0)).toList(),
+                        0,
+                        currency,
+                        isNegative: true,
+                      ),
+                      _buildDataRow(
+                        'Supplier Payments',
+                        -supplierCash,
+                        -supplierOnline,
+                        distinctBanks.map((b) => -(supplierBankMap[b] ?? 0.0)).toList(),
+                        0,
+                        currency,
+                        isNegative: true,
+                      ),
                       if (salaryCash > 0 || salaryOnline > 0)
-                        _buildDataRow('Staff Salaries & Advances', -salaryCash, -salaryOnline, 0, currency, isNegative: true),
-                      _buildDataRow('Old Receivables Collected', collectedReceivablesCash, collectedReceivablesOnline, -(collectedReceivablesCash + collectedReceivablesOnline), currency),
+                        _buildDataRow(
+                          'Staff Salaries & Advances',
+                          -salaryCash,
+                          -salaryOnline,
+                          distinctBanks.map((b) => -(salaryBankMap[b] ?? 0.0)).toList(),
+                          0,
+                          currency,
+                          isNegative: true,
+                        ),
+                      _buildDataRow(
+                        'Old Receivables Collected',
+                        collectedReceivablesCash,
+                        collectedReceivablesOnline,
+                        distinctBanks.map((b) => collectedReceivablesBankMap[b] ?? 0.0).toList(),
+                        -(collectedReceivablesCash + collectedReceivablesOnline),
+                        currency,
+                      ),
                       if (voidReversalCash > 0 || voidReversalOnline > 0)
-                        _buildDataRow('Refunds & Void Reversals', -voidReversalCash, -voidReversalOnline, 0, currency, isNegative: true),
+                        _buildDataRow(
+                          'Refunds & Void Reversals',
+                          -voidReversalCash,
+                          -voidReversalOnline,
+                          distinctBanks.map((b) => -(voidReversalBankMap[b] ?? 0.0)).toList(),
+                          0,
+                          currency,
+                          isNegative: true,
+                        ),
                       if (reconSurplusCash > 0)
-                        _buildDataRow('Reconciliation Surplus', reconSurplusCash, 0, 0, currency),
+                        _buildDataRow(
+                          'Reconciliation Surplus',
+                          reconSurplusCash,
+                          0,
+                          distinctBanks.map((b) => 0.0).toList(),
+                          0,
+                          currency,
+                        ),
                       if (reconShortageCash > 0)
-                        _buildDataRow('Reconciliation Shortage', -reconShortageCash, 0, 0, currency, isNegative: true),
-                      _buildBalanceRow('Net Remaining Balance', balCash, balOnline, balRec, currency),
+                        _buildDataRow(
+                          'Reconciliation Shortage',
+                          -reconShortageCash,
+                          0,
+                          distinctBanks.map((b) => 0.0).toList(),
+                          0,
+                          currency,
+                          isNegative: true,
+                        ),
+                      _buildBalanceRow(
+                        'Net Remaining Balance',
+                        balCash,
+                        balOnline,
+                        distinctBanks.map((b) => balBankMap[b] ?? 0.0).toList(),
+                        balRec,
+                        currency,
+                      ),
                     ],
                   ),
                 ),
@@ -500,12 +757,7 @@ class DrawerTabWidget extends ConsumerWidget {
           ],
         );
 
-        final activeAccounts = ref.watch(activePaymentAccountsProvider);
-        final Map<String, dynamic> onlineBreakdownMap =
-            (backendDrawerBalances?['onlineBreakdown'] as Map<String, dynamic>?) ?? {};
-
         return ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
           children: [
             if (isWide) balanceCards else Column(
               children: [
@@ -806,23 +1058,47 @@ class DrawerTabWidget extends ConsumerWidget {
     );
   }
 
-  static DataRow _buildDataRow(String label, double cash, double online, double rec, String currency, {bool isBold = false, bool isNegative = false}) {
+  static DataRow _buildDataRow(
+    String label,
+    double cash,
+    double online,
+    List<double> bankAmounts,
+    double rec,
+    String currency, {
+    bool isBold = false,
+    bool isNegative = false,
+  }) {
     final total = cash + online + rec;
     final textStyle = GoogleFonts.outfit(
       fontSize: 12,
       fontWeight: isBold ? FontWeight.bold : FontWeight.w500,
       color: isNegative ? Colors.red.shade700 : _kDark,
     );
+
+    String formatCell(double val) {
+      if (val == 0) return '-';
+      if (isNegative && val > 0) return '- $currency ${formatAmount(val)}';
+      return '$currency ${formatAmount(val)}';
+    }
+
     return DataRow(cells: [
       DataCell(Text(label, style: textStyle)),
-      DataCell(Text(cash == 0 ? '-' : (isNegative && cash > 0 ? '- $currency ${formatAmount(cash)}' : '$currency ${formatAmount(cash)}'), style: textStyle)),
-      DataCell(Text(online == 0 ? '-' : (isNegative && online > 0 ? '- $currency ${formatAmount(online)}' : '$currency ${formatAmount(online)}'), style: textStyle)),
-      DataCell(Text(rec == 0 ? '-' : (isNegative && rec > 0 ? '- $currency ${formatAmount(rec)}' : '$currency ${formatAmount(rec)}'), style: textStyle)),
-      DataCell(Text(total == 0 ? '-' : (isNegative && total > 0 ? '- $currency ${formatAmount(total)}' : '$currency ${formatAmount(total)}'), style: textStyle.copyWith(fontWeight: FontWeight.bold))),
+      DataCell(Text(formatCell(cash), style: textStyle)),
+      DataCell(Text(formatCell(online), style: textStyle)),
+      ...bankAmounts.map((bAmt) => DataCell(Text(formatCell(bAmt), style: textStyle))),
+      DataCell(Text(formatCell(rec), style: textStyle)),
+      DataCell(Text(formatCell(total), style: textStyle.copyWith(fontWeight: FontWeight.bold))),
     ]);
   }
 
-  static DataRow _buildBalanceRow(String label, double cash, double online, double rec, String currency) {
+  static DataRow _buildBalanceRow(
+    String label,
+    double cash,
+    double online,
+    List<double> bankBalances,
+    double rec,
+    String currency,
+  ) {
     final total = cash + online + rec;
     final textStyle = GoogleFonts.outfit(
       fontSize: 13,
@@ -835,6 +1111,9 @@ class DrawerTabWidget extends ConsumerWidget {
         DataCell(Text(label, style: textStyle)),
         DataCell(Text('$currency ${formatAmount(cash)}', style: textStyle.copyWith(color: const Color(0xFF10B981)))),
         DataCell(Text('$currency ${formatAmount(online)}', style: textStyle.copyWith(color: _kPrimary))),
+        ...bankBalances.map((bBal) => DataCell(
+          Text('$currency ${formatAmount(bBal)}', style: textStyle.copyWith(color: _kPrimary)),
+        )),
         DataCell(Text('$currency ${formatAmount(rec)}', style: textStyle.copyWith(color: const Color(0xFFF59E0B)))),
         DataCell(Text('$currency ${formatAmount(total)}', style: textStyle.copyWith(color: _kDark))),
       ],

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db';
-import { salaryDeductions, staff, ledgerEntries, salons } from '../db/schema';
+import { salaryDeductions, staff, ledgerEntries, salons, paymentAccounts } from '../db/schema';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { checkSubscription } from '../middleware/subscription';
 import { eq, and, gte, lte, sql } from 'drizzle-orm';
@@ -40,6 +40,7 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), chec
       where: whereClause,
       with: {
         staff: true,
+        paymentAccount: true,
         notedByUser: {
           columns: {
             password: false,
@@ -59,7 +60,7 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), chec
 
 // Add salary deduction/advance (Owner only)
 router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscription, async (req: AuthRequest, res) => {
-  const { staffId, type, amount, reason, date, paymentMethod } = req.body || {};
+  const { staffId, type, amount, reason, date, paymentMethod, paymentAccountId } = req.body || {};
   const salonId = req.user.salonId;
   const userId = req.user.id;
 
@@ -85,27 +86,42 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
     if (!targetStaff) return res.status(403).json({ message: 'Staff member does not belong to your salon' });
 
     const result = await db.transaction(async (tx) => {
+      let matchedAccount: any = null;
+      if (paymentAccountId) {
+        matchedAccount = await tx.query.paymentAccounts.findFirst({
+          where: and(
+            eq(paymentAccounts.id, paymentAccountId),
+            eq(paymentAccounts.salonId, salonId as string)
+          )
+        });
+      }
+
+      const method = (paymentMethod || 'CASH').toUpperCase();
+      const isOnline = ['ONLINE', 'CARD', 'BANK_TRANSFER', 'UPI', 'DIGITAL', 'BANK'].includes(method);
+      const resolvedAccountName = matchedAccount?.accountName || null;
+
       const [newDeduction] = await tx.insert(salaryDeductions).values({
         staffId,
         salonId: salonId as string,
         type,
         amount: amount.toString(),
         reason: reason || null,
+        paymentMethod: method,
+        paymentAccountId: matchedAccount?.id || paymentAccountId || null,
         date: date || new Date().toISOString().split('T')[0],
         notedBy: userId as string,
       }).returning();
 
-      const method = (paymentMethod || 'CASH').toUpperCase();
-      const isOnline = method === 'ONLINE' || method === 'CARD' || method === 'BANK_TRANSFER' || method === 'UPI' || method === 'DIGITAL';
-
       const structuredNotes = JSON.stringify({
         paymentMethod: method,
-        userNotes: `Staff ${type}: ${reason || 'N/A'}`
+        paymentAccountId: matchedAccount?.id || paymentAccountId || undefined,
+        paymentAccountName: resolvedAccountName || undefined,
+        userNotes: `Staff ${type}${resolvedAccountName ? ` (${resolvedAccountName})` : ''}: ${reason || 'N/A'}`
       });
 
       // Sync with Ledger
-      // ADVANCE: Money goes OUT (DEBIT)
-      // DEDUCTION: Money comes IN (CREDIT) to settle the advance (usually)
+      // ADVANCE: Money goes OUT (DEBIT) -> reduces balance
+      // DEDUCTION: Money comes IN (CREDIT) to settle the advance
       await tx.insert(ledgerEntries).values({
         salonId: salonId as string,
         staffId,
@@ -117,14 +133,17 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
         date: date ? new Date(date) : new Date(),
       });
 
-      // Update Salon Cash Balance (Only for ADVANCE if not online, as it's Money Out)
+      // Update Salon Cash Balance (Only for ADVANCE if cash, as it's Money Out from drawer)
       if (type === 'ADVANCE' && !isOnline) {
         await tx.update(salons)
           .set({ cashBalance: sql`GREATEST(0, ${salons.cashBalance}::numeric - ${amount.toString()}::numeric)` })
           .where(eq(salons.id, salonId as string));
       }
 
-      return newDeduction;
+      return {
+        ...newDeduction,
+        paymentAccount: matchedAccount || null
+      };
     });
 
     res.status(201).json(result);
@@ -137,14 +156,13 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
 // Update salary deduction (Owner only)
 router.patch('/:id', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscription, async (req: AuthRequest, res) => {
   const { id } = req.params;
-  const { type, amount, reason, date } = req.body || {};
+  const { type, amount, reason, date, paymentMethod, paymentAccountId } = req.body || {};
   const salonId = req.user.salonId;
 
   try {
     const updateData: any = {};
     if (type) updateData.type = type;
     if (amount) {
-      // Validate amount (Bug #22: Amount validation)
       const amountNum = parseFloat(amount);
       if (isNaN(amountNum) || amountNum <= 0) {
         return res.status(400).json({ message: 'Amount must be a positive number' });
@@ -153,15 +171,26 @@ router.patch('/:id', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSub
     }
     if (reason) updateData.reason = reason;
     if (date) updateData.date = date;
+    if (paymentMethod) updateData.paymentMethod = paymentMethod.toUpperCase();
+    if (paymentAccountId !== undefined) updateData.paymentAccountId = paymentAccountId;
 
     const result = await db.transaction(async (tx) => {
-      // 1. Get old deduction to calculate cash balance difference
       const oldDeduction = await tx.query.salaryDeductions.findFirst({
         where: and(eq(salaryDeductions.id, id as string), eq(salaryDeductions.salonId, salonId as string))
       });
       if (!oldDeduction) return null;
 
-      // 2. Update deduction
+      let matchedAccount: any = null;
+      const targetAccountId = paymentAccountId || oldDeduction.paymentAccountId;
+      if (targetAccountId) {
+        matchedAccount = await tx.query.paymentAccounts.findFirst({
+          where: and(
+            eq(paymentAccounts.id, targetAccountId),
+            eq(paymentAccounts.salonId, salonId as string)
+          )
+        });
+      }
+
       const [updated] = await tx.update(salaryDeductions)
         .set(updateData)
         .where(and(eq(salaryDeductions.id, id as string), eq(salaryDeductions.salonId, salonId as string)))
@@ -169,28 +198,45 @@ router.patch('/:id', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSub
 
       if (!updated) return null;
 
-      // 3. Update Cash Balance: Revert old advance, apply new advance
-      const oldAdv = oldDeduction.type === 'ADVANCE' ? parseFloat(oldDeduction.amount) : 0;
-      const newAdv = updated.type === 'ADVANCE' ? parseFloat(updated.amount) : 0;
-      const cashDiff = oldAdv - newAdv;
+      // Revert old advance cash impact, apply new advance cash impact
+      const oldMethod = (oldDeduction.paymentMethod || 'CASH').toUpperCase();
+      const oldIsCash = !['ONLINE', 'CARD', 'BANK_TRANSFER', 'UPI', 'DIGITAL', 'BANK'].includes(oldMethod);
+      const oldAdvCash = (oldDeduction.type === 'ADVANCE' && oldIsCash) ? parseFloat(oldDeduction.amount) : 0;
+
+      const newMethod = (updated.paymentMethod || 'CASH').toUpperCase();
+      const newIsCash = !['ONLINE', 'CARD', 'BANK_TRANSFER', 'UPI', 'DIGITAL', 'BANK'].includes(newMethod);
+      const newAdvCash = (updated.type === 'ADVANCE' && newIsCash) ? parseFloat(updated.amount) : 0;
+
+      const cashDiff = oldAdvCash - newAdvCash;
       if (cashDiff !== 0) {
         await tx.update(salons)
           .set({ cashBalance: sql`GREATEST(0, ${salons.cashBalance}::numeric + ${cashDiff.toString()}::numeric)` })
           .where(eq(salons.id, salonId as string));
       }
 
-      // 4. Update corresponding Ledger Entry
+      const resolvedAccountName = matchedAccount?.accountName || null;
+      const structuredNotes = JSON.stringify({
+        paymentMethod: newMethod,
+        paymentAccountId: matchedAccount?.id || undefined,
+        paymentAccountName: resolvedAccountName || undefined,
+        userNotes: `Updated Staff ${type || updated.type}${resolvedAccountName ? ` (${resolvedAccountName})` : ''}: ${reason || updated.reason || 'N/A'}`
+      });
+
+      // Update corresponding Ledger Entry
       await tx.update(ledgerEntries)
         .set({
           amount: amount ? amount.toString() : undefined,
           type: type ? (type === 'ADVANCE' ? 'DEBIT' : 'CREDIT') : undefined,
           category: type ? (type === 'ADVANCE' ? 'STAFF_ADVANCE' : 'STAFF_DEDUCTION') : undefined,
-          notes: `Updated Staff ${type || updated.type}: ${reason || updated.reason || 'N/A'}`,
+          notes: structuredNotes,
           date: date ? new Date(date) : undefined,
         })
         .where(eq(ledgerEntries.salaryDeductionId, id as string));
 
-      return updated;
+      return {
+        ...updated,
+        paymentAccount: matchedAccount || null
+      };
     });
 
     if (!result) return res.status(404).json({ message: 'Salary deduction not found' });
@@ -218,11 +264,14 @@ router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSu
       await tx.delete(ledgerEntries)
         .where(eq(ledgerEntries.salaryDeductionId, id as string));
 
-      // Reverse Cash Balance Deduction if it was an Advance
+      // Reverse Cash Balance Deduction only if it was an ADVANCE paid in Cash
       if (deleted.type === 'ADVANCE') {
-        await tx.update(salons)
-          .set({ cashBalance: sql`${salons.cashBalance} + ${deleted.amount}` })
-          .where(eq(salons.id, salonId as string));
+        const isOnline = ['ONLINE', 'CARD', 'BANK_TRANSFER', 'UPI', 'DIGITAL', 'BANK'].includes((deleted.paymentMethod || 'CASH').toUpperCase());
+        if (!isOnline) {
+          await tx.update(salons)
+            .set({ cashBalance: sql`${salons.cashBalance} + ${deleted.amount}` })
+            .where(eq(salons.id, salonId as string));
+        }
       }
       return deleted;
     });

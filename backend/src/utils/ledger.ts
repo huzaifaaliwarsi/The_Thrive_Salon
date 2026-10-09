@@ -146,7 +146,10 @@ export async function getSalonGallaBalances(
       sql`${sales.status} != 'DRAFT'`
     )),
     db.select().from(ledgerEntries).where(eq(ledgerEntries.salonId, salonId)),
-    db.select().from(paymentAccounts).where(eq(paymentAccounts.salonId, salonId))
+    db.select().from(paymentAccounts).where(eq(paymentAccounts.salonId, salonId)).catch((err) => {
+      console.warn('paymentAccounts query failed:', err.message);
+      return [];
+    })
   ]);
 
   const accountMap: Record<string, string> = {};

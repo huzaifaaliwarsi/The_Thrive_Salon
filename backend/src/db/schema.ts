@@ -87,6 +87,9 @@ export const expenses = pgTable('expenses', {
   name: text('name').notNull(),
   category: text('category').notNull(),
   amount: numeric('amount', { precision: 10, scale: 2 }).notNull(),
+  paymentMethod: text('payment_method').default('CASH'),
+  paymentAccountId: uuid('payment_account_id').references(() => paymentAccounts.id, { onDelete: 'set null' }),
+  paymentBreakdown: text('payment_breakdown'),
   date: date('date').default(sql`CURRENT_DATE`),
   createdAt: timestamp('created_at').default(sql`now()`),
 });
@@ -158,6 +161,8 @@ export const salaryDeductions = pgTable('salary_deductions', {
   type: text('type').notNull(),
   amount: numeric('amount', { precision: 10, scale: 2 }).notNull(),
   reason: text('reason'),
+  paymentMethod: text('payment_method').default('CASH'),
+  paymentAccountId: uuid('payment_account_id').references(() => paymentAccounts.id, { onDelete: 'set null' }),
   date: date('date').default(sql`CURRENT_DATE`),
   notedBy: uuid('noted_by'),
   createdAt: timestamp('created_at').default(sql`now()`),
@@ -338,7 +343,8 @@ export const clientsRelations = relations(clients, ({ one, many }) => ({
 
 export const expensesRelations = relations(expenses, ({ one, many }) => ({
   salon: one(salons, { fields: [expenses.salonId], references: [salons.id], relationName: 'expenses_salon_id' }),
-  ledgerEntries: many(ledgerEntries, { relationName: 'ledger_entries_expense_id' })
+  ledgerEntries: many(ledgerEntries, { relationName: 'ledger_entries_expense_id' }),
+  paymentAccount: one(paymentAccounts, { fields: [expenses.paymentAccountId], references: [paymentAccounts.id], relationName: 'expenses_payment_account_id' }),
 }));
 
 export const inventoryItemsRelations = relations(inventoryItems, ({ one, many }) => ({
@@ -375,7 +381,8 @@ export const salaryDeductionsRelations = relations(salaryDeductions, ({ one, man
   ledgerEntries: many(ledgerEntries, { relationName: 'ledger_entries_salary_deduction_id' }),
   notedByUser: one(users, { fields: [salaryDeductions.notedBy], references: [users.id], relationName: 'salary_deductions_noted_by' }),
   salon: one(salons, { fields: [salaryDeductions.salonId], references: [salons.id], relationName: 'salary_deductions_salon_id' }),
-  staff: one(staff, { fields: [salaryDeductions.staffId], references: [staff.id], relationName: 'salary_deductions_staff_id' })
+  staff: one(staff, { fields: [salaryDeductions.staffId], references: [staff.id], relationName: 'salary_deductions_staff_id' }),
+  paymentAccount: one(paymentAccounts, { fields: [salaryDeductions.paymentAccountId], references: [paymentAccounts.id], relationName: 'salary_deductions_payment_account_id' }),
 }));
 
 export const saleItemsRelations = relations(saleItems, ({ one, many }) => ({
@@ -389,7 +396,10 @@ export const paymentAccountsRelations = relations(paymentAccounts, ({ one, many 
   salon: one(salons, { fields: [paymentAccounts.salonId], references: [salons.id], relationName: 'payment_accounts_salon_id' }),
   sales: many(sales, { relationName: 'sales_payment_account_id' }),
   purchases: many(purchases, { relationName: 'purchases_payment_account_id' }),
+  expenses: many(expenses, { relationName: 'expenses_payment_account_id' }),
+  salaryDeductions: many(salaryDeductions, { relationName: 'salary_deductions_payment_account_id' }),
 }));
+
 
 
 export const salesRelations = relations(sales, ({ one, many }) => ({

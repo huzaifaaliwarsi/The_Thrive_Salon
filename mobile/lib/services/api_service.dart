@@ -582,7 +582,7 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> createSalaryDeduction(String staffId, String type, double amount, {String? reason, String? date, String? paymentMethod}) async {
+  Future<Map<String, dynamic>> createSalaryDeduction(String staffId, String type, double amount, {String? reason, String? date, String? paymentMethod, String? paymentAccountId}) async {
     try {
       final response = await _dio.post('/api/salary', data: {
         'staffId': staffId,
@@ -591,6 +591,7 @@ class ApiService {
         if (reason != null) 'reason': reason,
         if (date != null) 'date': date,
         if (paymentMethod != null) 'paymentMethod': paymentMethod,
+        if (paymentAccountId != null) 'paymentAccountId': paymentAccountId,
       });
       return Map<String, dynamic>.from(_processData(response.data));
     } on DioException catch (e) {
@@ -598,13 +599,15 @@ class ApiService {
     }
   }
 
-  Future<void> updateSalaryDeduction(String id, {String? type, double? amount, String? reason, String? date}) async {
+  Future<void> updateSalaryDeduction(String id, {String? type, double? amount, String? reason, String? date, String? paymentMethod, String? paymentAccountId}) async {
     try {
       final response = await _dio.patch('/api/salary/$id', data: {
         if (type != null) 'type': type,
         if (amount != null) 'amount': amount,
         if (reason != null) 'reason': reason,
         if (date != null) 'date': date,
+        if (paymentMethod != null) 'paymentMethod': paymentMethod,
+        if (paymentAccountId != null) 'paymentAccountId': paymentAccountId,
       });
       _processData(response.data);
     } on DioException catch (e) {

@@ -19,20 +19,20 @@ const validatePakistaniPhone = (phone: string): { valid: boolean; error?: string
   if (!phone || phone.length === 0) {
     return { valid: true }; // Phone is optional
   }
-  
+
   // Remove common separators and spaces
   const cleaned = phone.replace(/[\s\-()]/g, '');
-  
+
   // Allow general international format: 5 to 20 digits, optional leading '+'
   const isValid = /^\+?[0-9]{5,20}$/.test(cleaned);
-  
+
   if (!isValid) {
-    return { 
-      valid: false, 
-      error: 'Invalid phone number format. Phone must contain between 5 and 20 digits.' 
+    return {
+      valid: false,
+      error: 'Invalid phone number format. Phone must contain between 5 and 20 digits.'
     };
   }
-  
+
   return { valid: true };
 };
 
@@ -40,11 +40,11 @@ const validateSalaryAmount = (salaryValue: any, salaryType: string): { valid: bo
   if (salaryType === 'COMMISSION') {
     return { valid: true }; // Salary not required for commission-only
   }
-  
+
   if (salaryValue === undefined || salaryValue === null || salaryValue === '') {
     return { valid: false, error: `Salary amount required for salary type: ${salaryType}` };
   }
-  
+
   const parsed = parseFloat(salaryValue?.toString() || '0');
   if (isNaN(parsed)) {
     return { valid: false, error: 'Salary must be a valid number' };
@@ -52,7 +52,7 @@ const validateSalaryAmount = (salaryValue: any, salaryType: string): { valid: bo
   if (parsed < 0) {
     return { valid: false, error: 'Salary cannot be negative' };
   }
-  
+
   return { valid: true };
 };
 
@@ -70,12 +70,12 @@ const validateCommission = (commissionPercentage: any): { valid: boolean; error?
 
 // Create Staff (Owner only)
 router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscription, async (req: AuthRequest, res) => {
-  let { 
-    name, 
-    phone, 
+  let {
+    name,
+    phone,
     biometricPin,
-    salaryType, 
-    salaryValue, 
+    salaryType,
+    salaryValue,
     commissionPercentage,
     inTimeLimit,
     outTimeLimit,
@@ -125,8 +125,8 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
   // Validate salaryType
   const validSalaryTypes = ['MONTHLY', 'DAILY', 'COMMISSION', 'MONTHLY_PLUS_COMMISSION', 'DAILY_PLUS_COMMISSION'];
   if (!validSalaryTypes.includes(salaryType)) {
-    return res.status(400).json({ 
-      message: `Invalid salary type. Must be one of: ${validSalaryTypes.join(', ')}` 
+    return res.status(400).json({
+      message: `Invalid salary type. Must be one of: ${validSalaryTypes.join(', ')}`
     });
   }
 
@@ -232,10 +232,10 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
     res.status(201).json(result);
   } catch (error: any) {
     console.error('[Staff Creation Error] Detailed Trace:', error);
-    
+
     // Resolve DrizzleQueryError nested pg causes
     const pgError = error.cause || error;
-    
+
     // Check for Drizzle/Postgres specific errors
     if (pgError.code === '23505') {
       const detail = pgError.detail || '';
@@ -248,8 +248,8 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscri
       return res.status(400).json({ message: 'Duplicate data detected. This staff member may already exist.' });
     }
 
-    res.status(500).json({ 
-      message: 'Failed to create staff member.', 
+    res.status(500).json({
+      message: 'Failed to create staff member.',
       error: error.message,
       code: pgError.code || error.code
     });
@@ -303,7 +303,7 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), chec
       const finalStaff = allStaff.map(s => {
         const stats = aggSales.find((a: any) => a.staffId === s.id) || { salesCount: 0, totalSalesRevenue: 0 };
         const ledger = aggLedger.find((l: any) => l.staffId === s.id) || { balance: '0' };
-        
+
         const isOwnProfile = req.user.role === 'OWNER' || s.userId === req.user.id;
 
         return {
@@ -335,8 +335,8 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), chec
     res.json(allStaff);
   } catch (error: any) {
     console.error(error);
-    res.status(500).json({ 
-      message: 'Error fetching staff', 
+    res.status(500).json({
+      message: 'Error fetching staff',
       error: error.message,
       stack: error.stack,
       details: error
@@ -380,7 +380,7 @@ router.get('/:id', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), c
 // Update Staff (Owner only)
 router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubscription, async (req: AuthRequest, res) => {
   const { id } = req.params;
-  const { 
+  const {
     name, email, phone, salaryType, salaryValue, commissionPercentage, effectiveDate,
     inTimeLimit, outTimeLimit, lateTimeLimit, earlyExitTimeLimit,
     lateDeductionRate, earlyExitDeductionRate, allowedLeaves, joiningDate
@@ -404,8 +404,8 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubsc
     if (salaryType) {
       const validSalaryTypes = ['MONTHLY', 'DAILY', 'COMMISSION', 'MONTHLY_PLUS_COMMISSION', 'DAILY_PLUS_COMMISSION'];
       if (!validSalaryTypes.includes(salaryType)) {
-        return res.status(400).json({ 
-          message: `Invalid salary type. Must be one of: ${validSalaryTypes.join(', ')}` 
+        return res.status(400).json({
+          message: `Invalid salary type. Must be one of: ${validSalaryTypes.join(', ')}`
         });
       }
 
@@ -479,10 +479,10 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubsc
       }
 
       // 2. Update staff profile
-      const updateData: any = { 
-        name, 
-        phone: cleanPhone, 
-        salaryType, 
+      const updateData: any = {
+        name,
+        phone: cleanPhone,
+        salaryType,
         salaryValue: salaryValue?.toString(),
         commissionPercentage: commissionPercentage?.toString()
       };
@@ -507,14 +507,14 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSubsc
       if (!updatedStaff) throw new Error('Staff update failed');
 
       // 3. Track Salary History changes
-      const salaryChanged = 
+      const salaryChanged =
         (salaryType && salaryType !== currentStaffProfile.salaryType) ||
         (salaryValue !== undefined && salaryValue?.toString() !== currentStaffProfile.salaryValue?.toString()) ||
         (commissionPercentage !== undefined && commissionPercentage?.toString() !== currentStaffProfile.commissionPercentage?.toString());
 
       if (salaryChanged) {
         const effDate = effectiveDate ? effectiveDate.toString().trim() : new Date().toISOString().split('T')[0];
-        
+
         await tx.insert(staffSalaryHistory).values({
           staffId: updatedStaff.id,
           salonId,
@@ -556,7 +556,7 @@ router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSu
       .returning();
 
     if (!deletedStaff) return res.status(404).json({ message: 'Staff not found' });
-    
+
     if (deletedStaff.userId) {
       await db.delete(users).where(eq(users.id, deletedStaff.userId));
     }

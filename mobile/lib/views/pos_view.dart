@@ -1818,6 +1818,9 @@ class _SplitPaymentDialogState extends State<_SplitPaymentDialog> {
                       list.add({
                         'accountId': acc.id,
                         'accountName': acc.accountName,
+                        'accountTitle': acc.accountTitle,
+                        'accountNumber': acc.accountNumber,
+                        'iban': acc.iban,
                         'amount': val,
                       });
                     }
@@ -2302,6 +2305,15 @@ class _CheckoutFooter extends ConsumerWidget {
       }
     }
     try {
+      final accountsInfo = _resolvePaymentAccountsInfo(state, ref);
+      String? finalAccountId = state.selectedPaymentAccountId;
+      if (state.paymentMethod == 'ONLINE' && finalAccountId == null && (state.onlineBreakdown == null || state.onlineBreakdown!.isEmpty)) {
+        final accs = ref.read(paymentAccountsProvider).valueOrNull ?? [];
+        if (accs.isNotEmpty) {
+          finalAccountId = accs.firstWhere((a) => a.isActive, orElse: () => accs.first).id;
+        }
+      }
+
       final saleData = {
         'customerPhone': state.customerPhone,
         'customerName': state.customerName,
@@ -2311,7 +2323,7 @@ class _CheckoutFooter extends ConsumerWidget {
         'taxRate': state.taxRate,
         'total': state.total,
         'paymentMethod': state.paymentMethod,
-        'paymentAccountId': state.paymentMethod == 'ONLINE' ? state.selectedPaymentAccountId : null,
+        'paymentAccountId': state.paymentMethod == 'ONLINE' ? finalAccountId : null,
         'paymentBreakdown': state.paymentMethod == 'ONLINE' ? state.onlineBreakdown : null,
         'amountPaid': state.amountPaid,
         'staffId': null,
@@ -2349,7 +2361,7 @@ class _CheckoutFooter extends ConsumerWidget {
       ref.invalidate(paymentAccountsProvider);
       
       if (context.mounted) {
-        _showSuccessDialog(context, state, ref);
+        _showSuccessDialog(context, state, ref, accountsInfo);
       }
       ref.read(posProvider.notifier).clear();
     } catch (e) {
@@ -2436,8 +2448,9 @@ class _CheckoutFooter extends ConsumerWidget {
 
 
 
-  void _showSuccessDialog(BuildContext context, POSState state, WidgetRef ref) {
+  void _showSuccessDialog(BuildContext context, POSState state, WidgetRef ref, [List<InvoicePaymentAccountInfo>? passedAccountsInfo]) {
     final currency = ref.read(currencyProvider);
+    final accountsInfo = passedAccountsInfo ?? _resolvePaymentAccountsInfo(state, ref);
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -2477,9 +2490,30 @@ class _CheckoutFooter extends ConsumerWidget {
                   ],
                   const Divider(height: 12),
                   _dialogDetailRow('Payment Mode', state.paymentMethod.replaceAll('_', ' ')),
-                  if (state.paymentMethod == 'ONLINE' && state.onlineBreakdown != null) ...[
-                    const Divider(height: 12),
-                    _dialogDetailRow('Account Breakdown', 'Split (${state.onlineBreakdown!.length} accounts)'),
+                  if (state.paymentMethod == 'ONLINE' && accountsInfo.isNotEmpty) ...[
+                    for (final acc in accountsInfo) ...[
+                      const Divider(height: 12),
+                      _dialogDetailRow(
+                        accountsInfo.length > 1 ? 'Bank (${acc.accountName})' : 'Bank / Account',
+                        acc.accountName,
+                      ),
+                      if (acc.accountTitle != null && acc.accountTitle!.trim().isNotEmpty) ...[
+                        const Divider(height: 12),
+                        _dialogDetailRow('Holder Name', acc.accountTitle!),
+                      ],
+                      if (acc.accountNumber != null && acc.accountNumber!.trim().isNotEmpty) ...[
+                        const Divider(height: 12),
+                        _dialogDetailRow('Account No', acc.accountNumber!),
+                      ],
+                      if (acc.iban != null && acc.iban!.trim().isNotEmpty) ...[
+                        const Divider(height: 12),
+                        _dialogDetailRow('IBAN', acc.iban!),
+                      ],
+                      if (accountsInfo.length > 1 && acc.amount != null) ...[
+                        const Divider(height: 12),
+                        _dialogDetailRow('Amount', '$currency ${acc.amount!.toStringAsFixed(0)}'),
+                      ],
+                    ],
                   ],
                 ],
               ),
@@ -2572,6 +2606,8 @@ class _CheckoutFooter extends ConsumerWidget {
       );
     }).toList();
 
+    final paymentAccountsInfo = _resolvePaymentAccountsInfo(state, ref);
+
     final invoiceData = InvoiceData(
       invoiceId: state.draftId ?? ref.read(posProvider.notifier).getOrGenerateDraftId(),
       items: items,
@@ -2587,10 +2623,53 @@ class _CheckoutFooter extends ConsumerWidget {
       date: DateTime.now(),
       customerName: state.customerName,
       cashierName: authState?['name']?.toString(),
+      paymentAccountsInfo: paymentAccountsInfo.isNotEmpty ? paymentAccountsInfo : null,
     );
 
     final pdf = await PdfInvoiceGenerator.generate(invoiceData, salon, both);
     await Printing.layoutPdf(onLayout: (format) async => pdf.save());
+  }
+
+  List<InvoicePaymentAccountInfo> _resolvePaymentAccountsInfo(POSState state, WidgetRef ref) {
+    if (state.paymentMethod != 'ONLINE') return [];
+    final accounts = ref.read(paymentAccountsProvider).valueOrNull ?? [];
+    if (accounts.isEmpty) return [];
+    final list = <InvoicePaymentAccountInfo>[];
+
+    if (state.onlineBreakdown != null && state.onlineBreakdown!.isNotEmpty) {
+      for (final b in state.onlineBreakdown!) {
+        final accId = b['accountId']?.toString() ?? b['id']?.toString();
+        PaymentAccount? matched;
+        try {
+          matched = accounts.firstWhere((a) => a.id == accId);
+        } catch (_) {}
+
+        list.add(InvoicePaymentAccountInfo(
+          accountName: matched?.accountName ?? b['accountName']?.toString() ?? 'Online Account',
+          accountTitle: matched?.accountTitle ?? b['accountTitle']?.toString(),
+          accountNumber: matched?.accountNumber ?? b['accountNumber']?.toString(),
+          iban: matched?.iban ?? b['iban']?.toString(),
+          amount: (b['amount'] as num?)?.toDouble(),
+        ));
+      }
+    } else {
+      PaymentAccount? matched;
+      if (state.selectedPaymentAccountId != null) {
+        try {
+          matched = accounts.firstWhere((a) => a.id == state.selectedPaymentAccountId);
+        } catch (_) {}
+      }
+      matched ??= accounts.firstWhere((a) => a.isActive, orElse: () => accounts.first);
+
+      list.add(InvoicePaymentAccountInfo(
+        accountName: matched.accountName,
+        accountTitle: matched.accountTitle,
+        accountNumber: matched.accountNumber,
+        iban: matched.iban,
+        amount: state.amountPaid ?? state.total,
+      ));
+    }
+    return list;
   }
 
   Future<void> _shareDirectWhatsApp(BuildContext context, POSState state, WidgetRef ref) async {
@@ -2630,6 +2709,26 @@ class _CheckoutFooter extends ConsumerWidget {
 
     buffer.writeln("\n💰 *TOTAL: $currency ${state.total.toStringAsFixed(0)}*");
     buffer.writeln("Payment: ${state.paymentMethod.replaceAll('_', ' ')}");
+
+    final paymentAccountsInfo = _resolvePaymentAccountsInfo(state, ref);
+    if (paymentAccountsInfo.isNotEmpty) {
+      buffer.writeln("\n💳 *Online Account Details:*");
+      for (final acc in paymentAccountsInfo) {
+        final amt = acc.amount != null && paymentAccountsInfo.length > 1
+            ? " ($currency ${acc.amount!.toStringAsFixed(0)})"
+            : "";
+        buffer.writeln("• *Bank / Account:* ${acc.accountName}$amt");
+        if (acc.accountTitle != null && acc.accountTitle!.isNotEmpty) {
+          buffer.writeln("  *Holder Name:* ${acc.accountTitle}");
+        }
+        if (acc.accountNumber != null && acc.accountNumber!.isNotEmpty) {
+          buffer.writeln("  *A/C No:* ${acc.accountNumber}");
+        }
+        if (acc.iban != null && acc.iban!.isNotEmpty) {
+          buffer.writeln("  *IBAN:* ${acc.iban}");
+        }
+      }
+    }
     
     final qrDomain = authState?['salon']?['qrDomain'] ?? 'salonpro.app';
     final invoiceId = state.draftId ?? ref.read(posProvider.notifier).getOrGenerateDraftId();
@@ -2686,6 +2785,25 @@ class _CheckoutFooter extends ConsumerWidget {
       receiptBody += "- $name x${item.quantity}: $currency ${(item.price * item.quantity).toStringAsFixed(0)}\n";
     }
     receiptBody += "\n*Total Amount: $currency ${state.total.toStringAsFixed(0)}*\nMode: ${state.paymentMethod}";
+    final shareAccountsInfo = _resolvePaymentAccountsInfo(state, ref);
+    if (shareAccountsInfo.isNotEmpty) {
+      receiptBody += "\n💳 *Online Account Details:*";
+      for (final acc in shareAccountsInfo) {
+        final amt = acc.amount != null && shareAccountsInfo.length > 1
+            ? " ($currency ${acc.amount!.toStringAsFixed(0)})"
+            : "";
+        receiptBody += "\n• Bank: ${acc.accountName}$amt";
+        if (acc.accountTitle != null && acc.accountTitle!.isNotEmpty) {
+          receiptBody += "\n  Holder: ${acc.accountTitle}";
+        }
+        if (acc.accountNumber != null && acc.accountNumber!.isNotEmpty) {
+          receiptBody += "\n  A/C: ${acc.accountNumber}";
+        }
+        if (acc.iban != null && acc.iban!.isNotEmpty) {
+          receiptBody += "\n  IBAN: ${acc.iban}";
+        }
+      }
+    }
     receiptBody += "\n\n📄 *View PDF Invoice:*\n$invoiceUrl";
 
     final messageController = TextEditingController(text: "Thank you for your visit!");

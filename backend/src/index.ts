@@ -28,10 +28,51 @@ app.use(helmet());
 app.use(cors({ origin: process.env.NODE_ENV === 'production' ? process.env.FRONTEND_URL : /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/ }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.text({ type: 'text/plain' }));
+// Safe auto-migration on startup to ensure all tables & columns exist
+const runMigration = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS public.payment_accounts (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          salon_id UUID NOT NULL REFERENCES public.salons(id) ON DELETE CASCADE,
+          account_name TEXT NOT NULL,
+          account_title TEXT,
+          account_number TEXT,
+          iban TEXT,
+          type TEXT DEFAULT 'BANK',
+          is_active BOOLEAN DEFAULT true,
+          created_at TIMESTAMPTZ DEFAULT now(),
+          updated_at TIMESTAMPTZ DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_payment_accounts_salon_id ON public.payment_accounts(salon_id);
+      ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS payment_account_id UUID REFERENCES public.payment_accounts(id) ON DELETE SET NULL;
+      ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS payment_breakdown TEXT;
+      ALTER TABLE public.expenses ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'CASH';
+      ALTER TABLE public.expenses ADD COLUMN IF NOT EXISTS payment_account_id UUID REFERENCES public.payment_accounts(id) ON DELETE SET NULL;
+      ALTER TABLE public.expenses ADD COLUMN IF NOT EXISTS payment_breakdown TEXT;
+      ALTER TABLE public.salary_deductions ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'CASH';
+      ALTER TABLE public.salary_deductions ADD COLUMN IF NOT EXISTS payment_account_id UUID REFERENCES public.payment_accounts(id) ON DELETE SET NULL;
+    `);
+    console.log('[DB] Auto-migration check completed.');
+    return { ok: true };
+  } catch (err: any) {
+    console.error('[DB] Auto-migration error:', err.message);
+    return { ok: false, error: err.message };
+  }
+};
+runMigration();
+
 app.get('/api/health', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
-    res.json({ status: 'ok', environment: process.env.NODE_ENV, database: process.env.NODE_ENV === 'production' ? 'configured' : 'thrive_local' });
+    const mig = await runMigration();
+    res.json({
+      status: 'ok',
+      version: 'v2-multi-payment',
+      environment: process.env.NODE_ENV,
+      database: process.env.NODE_ENV === 'production' ? 'configured' : 'thrive_local',
+      migration: mig.ok ? 'success' : mig.error
+    });
   } catch { res.status(503).json({ status: 'database unavailable' }); }
 });
 if (process.env.NODE_ENV === 'production') app.use(securityLock);
@@ -47,8 +88,6 @@ app.use((error: Error, _req: express.Request, res: express.Response, _next: expr
   console.error(error.message);
   res.status(500).json({ message: 'Internal server error' });
 });
-if (require.main === module) {
-  const port = Number(process.env.PORT || 3000);
-  app.listen(port, process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1', () => console.log(`API ready at http://127.0.0.1:${port} (${process.env.NODE_ENV || 'development'})`));
-}
+const port = Number(process.env.PORT || 3000);
+app.listen(port, () => console.log(`API ready at port ${port}`));
 export default app;

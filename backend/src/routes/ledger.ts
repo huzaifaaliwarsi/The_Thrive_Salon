@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db';
-import { ledgerEntries, clients, vendors, salons, staff, purchases, sales } from '../db/schema';
+import { ledgerEntries, clients, vendors, salons, staff, purchases, sales, paymentAccounts } from '../db/schema';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { checkSubscription } from '../middleware/subscription';
 import { eq, and, desc, asc, sql, or } from 'drizzle-orm';
@@ -212,22 +212,40 @@ function getLedgerImpact(entry: { clientId?: string | null; vendorId?: string | 
 
 // Add Manual Payment / Settlement
 router.post('/payment', authenticate, authorize(['OWNER', 'STAFF', 'SUPER_ADMIN']), checkSubscription, async (req: AuthRequest, res) => {
-  const { clientId, vendorId, amount, type, notes: rawNotes, date, salonId: bodySalonId, purchaseId, saleId, paymentMethod: rawPaymentMethod } = req.body;
+  const { clientId, vendorId, amount, type, notes: rawNotes, date, salonId: bodySalonId, purchaseId, saleId, paymentMethod: rawPaymentMethod, paymentAccountId: rawPaymentAccountId } = req.body;
   const salonId = req.user.role === 'SUPER_ADMIN' ? (bodySalonId || req.user.salonId) : req.user.salonId;
 
   let detectedMethod = (rawPaymentMethod || '').toUpperCase();
-  if (!detectedMethod && rawNotes && rawNotes.trim().startsWith('{') && rawNotes.trim().endsWith('}')) {
+  let paymentAccountId = rawPaymentAccountId || null;
+  if (rawNotes && rawNotes.trim().startsWith('{') && rawNotes.trim().endsWith('}')) {
     try {
       const parsed = JSON.parse(rawNotes);
-      if (parsed.paymentMethod) detectedMethod = parsed.paymentMethod.toString().toUpperCase();
+      if (!detectedMethod && parsed.paymentMethod) detectedMethod = parsed.paymentMethod.toString().toUpperCase();
+      if (!paymentAccountId && parsed.paymentAccountId) paymentAccountId = parsed.paymentAccountId.toString();
     } catch (_) {}
   }
   const paymentMethod = detectedMethod || 'CASH';
+
+  let matchedAccount: any = null;
+  let resolvedAccountName: string | null = null;
+  if (paymentAccountId) {
+    matchedAccount = await db.query.paymentAccounts.findFirst({
+      where: and(
+        eq(paymentAccounts.id, paymentAccountId),
+        eq(paymentAccounts.salonId, salonId as string)
+      )
+    });
+    if (matchedAccount) {
+      resolvedAccountName = matchedAccount.accountName;
+    }
+  }
 
   let notes = rawNotes;
   if (!rawNotes || (!rawNotes.trim().startsWith('{') || !rawNotes.trim().endsWith('}'))) {
     notes = JSON.stringify({
       paymentMethod,
+      paymentAccountId: matchedAccount?.id || paymentAccountId || undefined,
+      paymentAccountName: resolvedAccountName || undefined,
       transactionType: 'PURE_PAYMENT',
       paidAmount: parseFloat(amount?.toString() || '0'),
       userNotes: rawNotes || `Payment of PKR ${amount}`
@@ -236,6 +254,12 @@ router.post('/payment', authenticate, authorize(['OWNER', 'STAFF', 'SUPER_ADMIN'
     try {
       const parsed = JSON.parse(rawNotes);
       parsed.paymentMethod = paymentMethod;
+      if (matchedAccount?.id || paymentAccountId) {
+        parsed.paymentAccountId = matchedAccount?.id || paymentAccountId;
+      }
+      if (resolvedAccountName) {
+        parsed.paymentAccountName = resolvedAccountName;
+      }
       notes = JSON.stringify(parsed);
     } catch (_) {}
   }
@@ -461,8 +485,43 @@ router.post('/payment', authenticate, authorize(['OWNER', 'STAFF', 'SUPER_ADMIN'
 // Update Ledger Entry
 router.put('/payment/:id', authenticate, authorize(['OWNER', 'SUPER_ADMIN']), checkSubscription, async (req: AuthRequest, res) => {
   const { id } = req.params;
-  const { amount, type, notes, date, purchaseId } = req.body;
+  const { amount, type, notes: rawNotes, date, purchaseId, paymentMethod: rawPaymentMethod, paymentAccountId: rawPaymentAccountId } = req.body;
   const salonId = req.user.salonId;
+
+  let notes = rawNotes;
+  let detectedMethod = (rawPaymentMethod || '').toUpperCase();
+  let paymentAccountId = rawPaymentAccountId || null;
+  if (rawNotes && rawNotes.trim().startsWith('{') && rawNotes.trim().endsWith('}')) {
+    try {
+      const parsed = JSON.parse(rawNotes);
+      if (!detectedMethod && parsed.paymentMethod) detectedMethod = parsed.paymentMethod.toString().toUpperCase();
+      if (!paymentAccountId && parsed.paymentAccountId) paymentAccountId = parsed.paymentAccountId.toString();
+    } catch (_) {}
+  }
+
+  let matchedAccount: any = null;
+  let resolvedAccountName: string | null = null;
+  if (paymentAccountId) {
+    matchedAccount = await db.query.paymentAccounts.findFirst({
+      where: and(
+        eq(paymentAccounts.id, paymentAccountId),
+        eq(paymentAccounts.salonId, salonId as string)
+      )
+    });
+    if (matchedAccount) {
+      resolvedAccountName = matchedAccount.accountName;
+    }
+  }
+
+  if (rawNotes && rawNotes.trim().startsWith('{') && rawNotes.trim().endsWith('}')) {
+    try {
+      const parsed = JSON.parse(rawNotes);
+      if (detectedMethod) parsed.paymentMethod = detectedMethod;
+      if (matchedAccount?.id || paymentAccountId) parsed.paymentAccountId = matchedAccount?.id || paymentAccountId;
+      if (resolvedAccountName) parsed.paymentAccountName = resolvedAccountName;
+      notes = JSON.stringify(parsed);
+    } catch (_) {}
+  }
 
   try {
     const result = await db.transaction(async (tx) => {

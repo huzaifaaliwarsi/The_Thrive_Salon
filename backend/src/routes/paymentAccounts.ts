@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db';
-import { paymentAccounts, sales } from '../db/schema';
+import { paymentAccounts, sales, expenses, purchases, salaryDeductions } from '../db/schema';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { checkSubscription } from '../middleware/subscription';
 import { eq, and, desc } from 'drizzle-orm';
@@ -145,7 +145,23 @@ router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'OWNER']), checkSu
     if (permanent) {
       await db.update(sales)
         .set({ paymentAccountId: null })
-        .where(eq(sales.paymentAccountId, id));
+        .where(eq(sales.paymentAccountId, id))
+        .catch(() => {});
+
+      await db.update(expenses)
+        .set({ paymentAccountId: null })
+        .where(eq(expenses.paymentAccountId, id))
+        .catch(() => {});
+
+      await db.update(purchases)
+        .set({ paymentAccountId: null })
+        .where(eq(purchases.paymentAccountId, id))
+        .catch(() => {});
+
+      await db.update(salaryDeductions)
+        .set({ paymentAccountId: null })
+        .where(eq(salaryDeductions.paymentAccountId, id))
+        .catch(() => {});
 
       await db.delete(paymentAccounts)
         .where(and(

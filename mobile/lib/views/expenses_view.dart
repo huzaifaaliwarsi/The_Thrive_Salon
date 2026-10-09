@@ -8,6 +8,8 @@ import 'package:intl/intl.dart';
 import '../providers/expenses_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/ledger_provider.dart';
+import '../models/payment_account.dart';
+import '../providers/payment_accounts_provider.dart';
 
 const _kPrimary  = Color(0xFF6A11CB);
 const _kDark     = Color(0xFF1B1B3A);
@@ -46,7 +48,9 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
     final customCategoryCtrl = TextEditingController();
     DateTime selectedDate = expense?['date'] != null ? DateTime.parse(expense!['date']).toLocal() : DateTime.now();
     bool isSubmitting = false;
-    String paymentMethod = 'CASH';
+    String paymentMethod = (expense?['paymentMethod']?.toString() ?? 'CASH').toUpperCase();
+    String? selectedPaymentAccountId = expense?['paymentAccountId']?.toString() ?? expense?['paymentAccount']?['id']?.toString();
+
     final ledgerEntriesList = ref.read(ledgerProvider(const LedgerParams())).valueOrNull?['entries'] as List<dynamic>? ?? [];
     if (expense != null) {
       final matchingLedger = ledgerEntriesList.firstWhere(
@@ -59,9 +63,20 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
           if (struct['paymentMethod'] != null) {
             paymentMethod = struct['paymentMethod'].toString().toUpperCase();
           }
+          if (struct['paymentAccountId'] != null && selectedPaymentAccountId == null) {
+            selectedPaymentAccountId = struct['paymentAccountId'].toString();
+          }
         } catch (_) {}
       }
     }
+
+    final double initAmt = double.tryParse(expense?['amount']?.toString() ?? '') ?? 0;
+    final cashPartController = TextEditingController(
+      text: paymentMethod == 'SPLIT' && initAmt > 0 ? (initAmt / 2).toStringAsFixed(2) : '',
+    );
+    final onlinePartController = TextEditingController(
+      text: paymentMethod == 'SPLIT' && initAmt > 0 ? (initAmt - (initAmt / 2)).toStringAsFixed(2) : '',
+    );
 
     showDialog(
       context: context,
@@ -76,7 +91,20 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _field(nameController, 'Expense Name', LucideIcons.fileText, enabled: !isSubmitting),
-                  _field(amountController, 'Amount (PKR)', LucideIcons.banknote, type: TextInputType.number, enabled: !isSubmitting),
+                  _field(
+                    amountController, 
+                    'Amount (PKR)', 
+                    LucideIcons.banknote, 
+                    type: TextInputType.number, 
+                    enabled: !isSubmitting,
+                    onChanged: (val) {
+                      if (paymentMethod == 'SPLIT') {
+                        final total = double.tryParse(val) ?? 0;
+                        cashPartController.text = (total / 2).toStringAsFixed(2);
+                        onlinePartController.text = (total - (total / 2)).toStringAsFixed(2);
+                      }
+                    },
+                  ),
                   DropdownButtonFormField<String>(
                     value: selectedCategory,
                     style: GoogleFonts.outfit(fontSize: 14, color: Colors.black),
@@ -105,15 +133,20 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
                   ],
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: paymentMethod,
+                    value: (paymentMethod == 'ONLINE' || paymentMethod == 'SPLIT') ? paymentMethod : 'CASH',
                     style: GoogleFonts.outfit(fontSize: 14, color: Colors.black),
                     onChanged: isSubmitting ? null : (v) {
                       setDialogState(() {
-                        paymentMethod = v!;
+                        paymentMethod = v ?? 'CASH';
+                        if (paymentMethod == 'SPLIT') {
+                          final t = double.tryParse(amountController.text) ?? 0;
+                          cashPartController.text = (t / 2).toStringAsFixed(2);
+                          onlinePartController.text = (t - (t / 2)).toStringAsFixed(2);
+                        }
                       });
                     },
                     decoration: InputDecoration(
-                      labelText: 'Payment Method',
+                      labelText: 'Payment Method *',
                       prefixIcon: Icon(LucideIcons.creditCard, size: 18, color: _kPrimary.withValues(alpha: 0.5)),
                       filled: true,
                       fillColor: _kBg,
@@ -124,10 +157,134 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
                       labelStyle: GoogleFonts.outfit(fontSize: 14, color: Colors.black38),
                     ),
                     items: const [
-                      DropdownMenuItem(value: 'CASH', child: Text('Cash')),
-                      DropdownMenuItem(value: 'ONLINE', child: Text('Online / Card')),
+                      DropdownMenuItem(value: 'CASH', child: Text('Cash Drawer')),
+                      DropdownMenuItem(value: 'ONLINE', child: Text('Online / Bank / Wallet')),
+                      DropdownMenuItem(value: 'SPLIT', child: Text('Split (Cash + Online)')),
                     ],
                   ),
+                  if (paymentMethod == 'ONLINE' || paymentMethod == 'SPLIT') ...[
+                    const SizedBox(height: 12),
+                    Consumer(
+                      builder: (context, ref, _) {
+                        final accountsAsync = ref.watch(paymentAccountsProvider);
+                        final accounts = accountsAsync.maybeWhen(
+                          data: (list) => list.where((a) => a.isActive).toList(),
+                          orElse: () => <PaymentAccount>[],
+                        );
+
+                        if (accounts.isEmpty) {
+                          return Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.amber.shade300),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(LucideIcons.alertTriangle, color: Color(0xFFD97706), size: 18),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'No active bank accounts found. Please configure in Settings > Payment Accounts.',
+                                    style: GoogleFonts.outfit(fontSize: 12, color: const Color(0xFF92400E)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+
+                        if (selectedPaymentAccountId == null && accounts.isNotEmpty) {
+                          selectedPaymentAccountId = accounts.first.id;
+                        }
+
+                        return DropdownButtonFormField<String>(
+                          value: selectedPaymentAccountId,
+                          style: GoogleFonts.outfit(fontSize: 14, color: Colors.black),
+                          decoration: InputDecoration(
+                            labelText: paymentMethod == 'SPLIT' ? 'Online Bank Account (for split portion) *' : 'Select Bank / Wallet Account *',
+                            prefixIcon: Icon(LucideIcons.landmark, size: 18, color: _kPrimary.withValues(alpha: 0.5)),
+                            filled: true,
+                            fillColor: _kBg,
+                            contentPadding: const EdgeInsets.fromLTRB(12, 24, 12, 10),
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide.none),
+                            labelStyle: GoogleFonts.outfit(fontSize: 14, color: Colors.black38),
+                          ),
+                          items: accounts.map((a) {
+                            final icon = a.type == 'WALLET' ? LucideIcons.smartphone : LucideIcons.landmark;
+                            return DropdownMenuItem<String>(
+                              value: a.id,
+                              child: Row(
+                                children: [
+                                  Icon(icon, size: 14, color: _kPrimary),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    a.accountNumber != null && a.accountNumber!.isNotEmpty
+                                        ? '${a.accountName} (${a.accountNumber})'
+                                        : a.accountName,
+                                    style: GoogleFonts.outfit(fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: isSubmitting ? null : (v) => setDialogState(() => selectedPaymentAccountId = v),
+                        );
+                      },
+                    ),
+                  ],
+                  if (paymentMethod == 'SPLIT') ...[
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: cashPartController,
+                            keyboardType: TextInputType.number,
+                            style: GoogleFonts.outfit(fontSize: 13),
+                            onChanged: (val) {
+                              final total = double.tryParse(amountController.text) ?? 0;
+                              final cash = double.tryParse(val) ?? 0;
+                              onlinePartController.text = (total - cash).toStringAsFixed(2);
+                            },
+                            decoration: InputDecoration(
+                              labelText: 'Cash Part',
+                              prefixText: 'PKR ',
+                              filled: true,
+                              fillColor: _kBg,
+                              contentPadding: const EdgeInsets.fromLTRB(10, 16, 10, 8),
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide.none),
+                              labelStyle: GoogleFonts.outfit(fontSize: 12, color: Colors.black38),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: onlinePartController,
+                            keyboardType: TextInputType.number,
+                            style: GoogleFonts.outfit(fontSize: 13),
+                            decoration: InputDecoration(
+                              labelText: 'Online Part',
+                              prefixText: 'PKR ',
+                              filled: true,
+                              fillColor: _kBg,
+                              contentPadding: const EdgeInsets.fromLTRB(10, 16, 10, 8),
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide.none),
+                              labelStyle: GoogleFonts.outfit(fontSize: 12, color: Colors.black38),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   InkWell(
                     onTap: isSubmitting ? null : () async {
@@ -212,15 +369,40 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
                               return;
                             }
 
-                             if (amt > cashBalance) {
-                               if (ctx.mounted) {
-                                 ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
-                                   content: Text('Warning: Cash Drawer balance is negative.', style: TextStyle(color: Colors.white)),
-                                   backgroundColor: Colors.orangeAccent,
-                                   behavior: SnackBarBehavior.floating,
-                                 ));
-                               }
-                             }
+                            double cashAmt = amt;
+                            double onlineAmt = 0;
+                            if (paymentMethod == 'ONLINE') {
+                              cashAmt = 0;
+                              onlineAmt = amt;
+                            } else if (paymentMethod == 'SPLIT') {
+                              cashAmt = double.tryParse(cashPartController.text) ?? 0;
+                              onlineAmt = double.tryParse(onlinePartController.text) ?? 0;
+                              if (cashAmt + onlineAmt <= 0) {
+                                cashAmt = amt / 2;
+                                onlineAmt = amt - cashAmt;
+                              }
+                            }
+
+                            if ((paymentMethod == 'ONLINE' || (paymentMethod == 'SPLIT' && onlineAmt > 0)) && (selectedPaymentAccountId == null || selectedPaymentAccountId!.isEmpty)) {
+                              if (ctx.mounted) {
+                                ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                                  content: Text('Please select a bank or wallet account for the online payment.', style: TextStyle(color: Colors.white)),
+                                  backgroundColor: Colors.redAccent,
+                                  behavior: SnackBarBehavior.floating,
+                                ));
+                              }
+                              return;
+                            }
+
+                            if (cashAmt > cashBalance && cashAmt > 0) {
+                              if (ctx.mounted) {
+                                ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                                  content: Text('Warning: Cash Drawer balance is lower than cash expense.', style: TextStyle(color: Colors.white)),
+                                  backgroundColor: Colors.orangeAccent,
+                                  behavior: SnackBarBehavior.floating,
+                                ));
+                              }
+                            }
                             
                             final data = {
                               'name': nameController.text.trim(),
@@ -228,6 +410,9 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
                               'category': finalCat,
                               'date': selectedDate.toIso8601String().split('T')[0],
                               'paymentMethod': paymentMethod,
+                              'paymentAccountId': (paymentMethod == 'ONLINE' || (paymentMethod == 'SPLIT' && onlineAmt > 0)) ? selectedPaymentAccountId : null,
+                              if (paymentMethod == 'SPLIT') 'cashAmount': cashAmt,
+                              if (paymentMethod == 'SPLIT') 'onlineAmount': onlineAmt,
                             };
                             
                             if (isEditing) {
@@ -235,6 +420,9 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
                             } else {
                               await ref.read(expenseControllerProvider.notifier).addExpense(data);
                             }
+                            // Also refresh ledger and payment accounts
+                            ref.invalidate(ledgerProvider);
+                            ref.invalidate(expensesProvider);
                             if (ctx.mounted) Navigator.pop(ctx);
                           } catch (e) {
                             if (ctx.mounted) {
@@ -419,6 +607,8 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
       );
     }
 
+    final accounts = ref.watch(paymentAccountsProvider).valueOrNull ?? [];
+
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       itemCount: data.length,
@@ -438,9 +628,17 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
             contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             leading: _getCategoryIcon(expense['category']),
             title: Text(expense['name'] ?? 'Unknown', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: _kDark)),
-            subtitle: Text(
-              '${expense['category']} • ${DateFormat('MMM dd, yyyy').format(date)}',
-              style: GoogleFonts.outfit(color: Colors.black38, fontSize: 12),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 2),
+                Text(
+                  '${expense['category']} • ${DateFormat('MMM dd, yyyy').format(date)}',
+                  style: GoogleFonts.outfit(color: Colors.black38, fontSize: 12),
+                ),
+                const SizedBox(height: 4),
+                _buildPaymentBadge(expense, accounts),
+              ],
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
@@ -508,6 +706,59 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
     );
   }
 
+  Widget _buildPaymentBadge(Map<String, dynamic> expense, List<PaymentAccount> accounts) {
+    final method = (expense['paymentMethod']?.toString() ?? 'CASH').toUpperCase();
+    final accountId = expense['paymentAccountId']?.toString() ?? expense['paymentAccount']?['id']?.toString();
+    String? accountName = expense['paymentAccount']?['accountName']?.toString();
+    if (accountName == null && accountId != null) {
+      final matched = accounts.where((a) => a.id == accountId).toList();
+      if (matched.isNotEmpty) {
+        accountName = matched.first.accountName;
+      }
+    }
+
+    Color bg;
+    Color fg;
+    IconData icon;
+    String label;
+
+    if (method == 'SPLIT') {
+      bg = Colors.purple.withValues(alpha: 0.1);
+      fg = Colors.purple.shade700;
+      icon = LucideIcons.split;
+      label = accountName != null ? 'Split (Cash + $accountName)' : 'Split Payment';
+    } else if (method == 'ONLINE' || method == 'CARD' || method == 'BANK_TRANSFER' || method == 'BANK') {
+      bg = Colors.blue.withValues(alpha: 0.1);
+      fg = Colors.blue.shade700;
+      icon = LucideIcons.landmark;
+      label = accountName ?? 'Online Bank';
+    } else {
+      bg = Colors.green.withValues(alpha: 0.1);
+      fg = Colors.green.shade700;
+      icon = LucideIcons.banknote;
+      label = 'Cash Drawer';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: fg),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _confirmDelete(String id) {
     showDialog(
       context: context,
@@ -544,13 +795,14 @@ class _ExpensesViewState extends ConsumerState<ExpensesView> {
   }
 
   Widget _field(TextEditingController c, String label, IconData icon,
-      {TextInputType? type, bool enabled = true}) {
+      {TextInputType? type, bool enabled = true, ValueChanged<String>? onChanged}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: TextField(
         controller: c,
         keyboardType: type,
         enabled: enabled,
+        onChanged: onChanged,
         style: GoogleFonts.outfit(fontSize: 14),
         decoration: InputDecoration(
           labelText: label,

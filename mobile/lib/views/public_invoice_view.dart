@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
@@ -113,6 +114,35 @@ class _PublicInvoiceViewState extends ConsumerState<PublicInvoiceView> {
 
           final total = double.tryParse(_sale['total']?.toString() ?? '') ?? 0.0;
           final paid = double.tryParse(_sale['amountPaid']?.toString() ?? '') ?? 0.0;
+          List<InvoicePaymentAccountInfo>? paymentAccountsInfo;
+          final method = _sale['paymentMethod']?.toString().toUpperCase() ?? '';
+          if (method == 'ONLINE') {
+            final breakdownRaw = _sale['paymentBreakdown'];
+            final paymentAccountRaw = _sale['paymentAccount'];
+            final list = <InvoicePaymentAccountInfo>[];
+
+            if (breakdownRaw != null && breakdownRaw.toString().isNotEmpty) {
+              try {
+                final decoded = breakdownRaw is String ? jsonDecode(breakdownRaw) : breakdownRaw;
+                if (decoded is List) {
+                  for (final item in decoded) {
+                    if (item is Map<String, dynamic>) {
+                      list.add(InvoicePaymentAccountInfo.fromJson(item));
+                    }
+                  }
+                }
+              } catch (_) {}
+            }
+
+            if (list.isEmpty && paymentAccountRaw is Map<String, dynamic>) {
+              list.add(InvoicePaymentAccountInfo.fromJson(paymentAccountRaw));
+            }
+
+            if (list.isNotEmpty) {
+              paymentAccountsInfo = list;
+            }
+          }
+
           final invoiceData = InvoiceData(
             invoiceId: _sale['id'],
             savedInvoiceNumber: _sale['invoiceNumber']?.toString(),
@@ -129,6 +159,7 @@ class _PublicInvoiceViewState extends ConsumerState<PublicInvoiceView> {
             cashierName: _sale['staff']?['name']?.toString(),
             items: items,
             date: DateTime.tryParse(dateStr)?.toLocal() ?? DateTime.now(),
+            paymentAccountsInfo: paymentAccountsInfo,
           );
 
           final pdfDoc = await PdfInvoiceGenerator.generate(invoiceData, _salon, false);

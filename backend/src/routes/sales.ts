@@ -1268,6 +1268,7 @@ router.get('/public/:id', async (req, res) => {
       with: {
         saleItems: true,
         staff: true,
+        paymentAccount: true,
       }
     });
 

@@ -88,7 +88,15 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), asyn
         },
       });
       if (mySalon) {
-        const { cashBalance, onlineBalance } = await getSalonGallaBalances(mySalon.id, gallaStart, gallaEnd);
+        let cashBalance = Number(mySalon.cashBalance || 0);
+        let onlineBalance = 0;
+        try {
+          const balances = await getSalonGallaBalances(mySalon.id, gallaStart, gallaEnd);
+          cashBalance = balances.cashBalance;
+          onlineBalance = balances.onlineBalance;
+        } catch (balErr: any) {
+          console.error('getSalonGallaBalances failed for mySalon:', balErr?.message);
+        }
         return res.json([{
           ...mySalon,
           cashBalance,
@@ -110,7 +118,15 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), asyn
 
     const salonsWithBalances = await Promise.all(
       allSalons.map(async (salon) => {
-        const { cashBalance, onlineBalance } = await getSalonGallaBalances(salon.id, gallaStart, gallaEnd);
+        let cashBalance = Number(salon.cashBalance || 0);
+        let onlineBalance = 0;
+        try {
+          const balances = await getSalonGallaBalances(salon.id, gallaStart, gallaEnd);
+          cashBalance = balances.cashBalance;
+          onlineBalance = balances.onlineBalance;
+        } catch (balErr: any) {
+          console.error('getSalonGallaBalances failed for salon:', salon.id, balErr?.message);
+        }
         return {
           ...salon,
           cashBalance,
@@ -120,9 +136,9 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'OWNER', 'STAFF']), asyn
     );
 
     res.json(salonsWithBalances);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Error fetching salons' });
+  } catch (error: any) {
+    console.error('Error fetching salons:', error);
+    res.status(500).json({ message: 'Error fetching salons', error: error?.message || String(error) });
   }
 });
 

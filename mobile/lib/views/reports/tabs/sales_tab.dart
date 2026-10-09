@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -89,6 +90,34 @@ class _SalesTabWidgetState extends ConsumerState<SalesTabWidget> {
     final saleIdStr = sale['id']?.toString() ?? '';
     final generatedInvoiceId = invoiceNumber(saleIdStr, savedNumber: sale['invoiceNumber']);
 
+    List<InvoicePaymentAccountInfo>? paymentAccountsInfo;
+    if (method == 'ONLINE') {
+      final breakdownRaw = sale['paymentBreakdown'];
+      final paymentAccountRaw = sale['paymentAccount'];
+      final list = <InvoicePaymentAccountInfo>[];
+
+      if (breakdownRaw != null && breakdownRaw.toString().isNotEmpty) {
+        try {
+          final decoded = breakdownRaw is String ? jsonDecode(breakdownRaw) : breakdownRaw;
+          if (decoded is List) {
+            for (final item in decoded) {
+              if (item is Map<String, dynamic>) {
+                list.add(InvoicePaymentAccountInfo.fromJson(item));
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (list.isEmpty && paymentAccountRaw is Map<String, dynamic>) {
+        list.add(InvoicePaymentAccountInfo.fromJson(paymentAccountRaw));
+      }
+
+      if (list.isNotEmpty) {
+        paymentAccountsInfo = list;
+      }
+    }
+
     final invoiceData = InvoiceData(
       invoiceId: saleIdStr,
       savedInvoiceNumber: sale['invoiceNumber']?.toString(),
@@ -105,6 +134,7 @@ class _SalesTabWidgetState extends ConsumerState<SalesTabWidget> {
       date: date,
       customerName: sale['customerName']?.toString(),
       cashierName: sale['staff']?['name']?.toString(),
+      paymentAccountsInfo: paymentAccountsInfo,
     );
 
     final pdf = await PdfInvoiceGenerator.generate(invoiceData, salon, false);
